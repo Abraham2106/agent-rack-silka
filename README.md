@@ -132,12 +132,44 @@ npm run silka -- connect codex
 
 En `ui`, el encabezado muestra el puerto del hub (vivo o caído) y cuántas sesiones hay. ↑/↓ elige. Cada fila tiene ícono y color según el estado, el agente, el origen (`tú`, `claude-code`, `codex`…), el tiempo y una marca si hay mensajes en cola (`Q`) o notas (`N`). Si una sesión la lanzó otra, queda anidada debajo. A la derecha va la actividad en vivo (pasos cortos, no JSON; el texto `✎` espera un salto de línea o una pausa para no cortar una palabra) con el resumen debajo cuando termina. Abajo, Enter envía; si el turno sigue `running`, el mensaje queda **en cola**. `n` crea una sesión (agente con flechas, modelo opcional, prompt multilínea: Enter es otra línea y Ctrl+S envía). `i` redirige, `m` deja una nota, `c` cancela con confirmación, `?` abre la ayuda y `q` sale. Sin hub, el error dice `corre: silka hub`.
 
-`bridge` es el servidor MCP por stdio que reexpone las herramientas del hub (y `silka_notes`). Si el hub no está, lo arranca aparte y espera. `connect` / `disconnect` registran ese puente con el nombre `agent-rack`.
+`bridge` es el servidor MCP por stdio que reexpone las herramientas del hub (y `silka_notes`, `silka_state`, `silka_changes`, `silka_decide`, `silka_decisions`). Si el hub no está, lo arranca aparte y espera. `connect` / `disconnect` registran ese puente con el nombre `agent-rack`.
+
+En `ui`, `e` abre la vista Estado del workspace de la sesión elegida: rama, HEAD, tareas, archivos, conflictos y decisiones. Si dos tareas en curso tocan el mismo archivo, la fila lleva `!` y queda una nota para el manager.
+
+## Estado compartido
+
+Cada turno que pasa por el shim anota en `<workspace>/.silka/` qué agente trabajó, desde qué commit y qué archivos tocó. `tasks.json` guarda la sesión, el origen, la rama, el commit base, el inicio, el fin, el estado y un resumen de una línea. Los archivos salen de comparar `git status --porcelain` y el hash de cada uno al empezar y al terminar. Si otro agente estaba en el mismo árbol, el archivo queda marcado como ambiguo. `decisions.jsonl` guarda decisiones con autor, fecha, sesión y texto.
+
+Al empezar el turno, el shim antepone como máximo 15 líneas, "Estado del proyecto (silka)": rama y HEAD, lo que cambiaron otros agentes en las últimas 2 horas, las tareas en curso y las últimas 3 decisiones. Sin repo git, el bloque es mínimo. No vuelca archivos.
+
+Esas mismas líneas están en el bridge:
+
+| Herramienta | Qué hace |
+|---|---|
+| `silka_state({workspace})` | El resumen compacto. |
+| `silka_changes({workspace, since?})` | Cambios desde una fecha ISO (por defecto, 2 horas). |
+| `silka_decide({workspace, text})` | Anota una decisión. |
+| `silka_decisions({workspace, limit})` | Lee las últimas. |
+
+Codex puede reenviar `SILKA_DEPTH` y `SILKA_AGENT` a sus servidores MCP con `env_vars` en `~/.codex/config.toml`. `silka connect codex` lo anota si falta. Cursor y OpenCode solo aceptan variables fijas (`--env` / `env`), no el valor del proceso padre. Si la variable no llega, el bridge toma la sesión en curso del mismo agente y workspace, guarda `parentSessionId` y `depth = profundidad del padre + 1`, y el TUI anida esa sesión debajo.
+
+## Graphify (opcional)
+
+[Graphify](https://github.com/graphify-labs/graphify) (`pip install graphifyy`) arma un grafo del repo. Silka no lo necesita: sin él, el estado, el bridge y el TUI siguen igual. `silka graph status` lo dice si no está instalado.
+
+```bash
+pip install --user graphifyy
+npm run silka -- graph status .
+npm run silka -- graph build .
+npm run silka -- connect claude --with-graph
+```
+
+`graph build` corre `graphify extract <workspace> --code-only` (el AST, sin API) y deja `graphify-out/graph.json`. Si ese archivo existe, el bloque de estado agrega una línea con la ruta y las herramientas `query_graph`, `get_node` y `get_neighbors`. `--with-graph` registra el MCP (`graphify-mcp <graph.json>`) en ese harness.
 
 ## Cómo funciona
 
 - [`shims/agent-shim.mjs`](shims/agent-shim.mjs) es el puente:
-  - **Codex**: passthrough a `codex exec --json`, que agent-rack ya entiende. El shim resuelve el binario real y lo lanza sin shell.
+  - **Codex**: `codex exec --json`. El shim deja en stdout el hilo y el mensaje final, y manda el resto a stderr como pasos (`→ mcp agent-rack.opencode_run`, `→ $ cmd`), para que el resumen no arrastre el JSON.
   - **OpenCode**: `opencode run --format json`, leído línea por línea y traducido al formato JSON de Claude Code. Le indica el directorio de trabajo, porque OpenCode resuelve rutas relativas contra la raíz del repo git.
   - **Cursor**: `cursor-agent -p --output-format stream-json --stream-partial-output --trust`, leído línea por línea. `mode=plan` se traduce a `--mode plan` (solo lectura) y la escritura a `--force`.
   - **Actividad en vivo**: cada paso de Cursor y OpenCode sale al momento por stderr (`→ read src/x.ts`, `→ $ npm test`, `✎ texto`). stdout queda en la línea final `{"type":"result",...}`, así el resumen del manager sigue corto.

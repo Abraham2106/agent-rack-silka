@@ -5,6 +5,7 @@ import { activityFromEvents, clip, formatDuration, isBusy, nestSessions, originL
 import { readMeta, rememberSession } from './hub.mjs';
 import { appendNote, unreadSessionIds } from './notes.mjs';
 import { readOrigins } from './origin.mjs';
+import { matchTaskSession, refreshConflicts, samePath, workspaceReport } from './state.mjs';
 
 const h = React.createElement;
 
@@ -54,6 +55,8 @@ export function App({ client, port, agents, models = {} }) {
   const [hubOk, setHubOk] = useState(true);
   const [mode, setMode] = useState('main');
   const [wizard, setWizard] = useState(null);
+  const [board, setBoard] = useState(null);
+  const [hotIds, setHotIds] = useState(() => new Set());
 
   const sessionsRef = useRef([]);
   const selectedIdRef = useRef(null);
@@ -109,6 +112,31 @@ export function App({ client, port, agents, models = {} }) {
         setOrigins(readOrigins());
         setNoted(unreadSessionIds());
         setHubOk(true);
+        const dirs = new Set();
+        const selectedNow = sessionsNow.find((session) => session.sessionId === selectedIdRef.current) ?? sessionsNow[0];
+        if (selectedNow?.workspace) dirs.add(selectedNow.workspace);
+        for (const session of sessionsNow) {
+          if (isBusy(session.status) && session.workspace) dirs.add(session.workspace);
+        }
+        const hot = new Set();
+        const fresh = Date.now() - 6 * 60 * 60 * 1000;
+        for (const dir of dirs) {
+          try {
+            refreshConflicts(dir, sessionsNow);
+            const report = workspaceReport(dir);
+            if (selectedNow && samePath(selectedNow.workspace, dir)) setBoard(report);
+            for (const conflict of report.conflicts) {
+              if (Date.parse(conflict.at) < fresh) continue;
+              for (const taskId of conflict.taskIds || []) {
+                const task = report.tasks.find((item) => item.id === taskId);
+                const session = task ? matchTaskSession({ ...task, workspace: dir }, sessionsNow) : null;
+                if (session) hot.add(session.sessionId);
+              }
+            }
+          } catch { /* un workspace sin estado no frena el tablero */ }
+        }
+        if (!dirs.size) setBoard(null);
+        setHotIds(hot);
 
         for (const session of sessionsNow) {
           const id = session.sessionId;
@@ -274,6 +302,10 @@ export function App({ client, port, agents, models = {} }) {
       if (key.escape || input === '?' || input === 'q') setMode('main');
       return;
     }
+    if (currentMode === 'estado') {
+      if (key.escape || input === 'e' || input === 'q') setMode('main');
+      return;
+    }
     if (currentMode === 'confirm') {
       if (input === 's' || input === 'S' || input === 'y' || input === 'Y') void cancelSelected();
       setMode('main');
@@ -397,6 +429,10 @@ export function App({ client, port, agents, models = {} }) {
       setMode('note');
       return;
     }
+    if (input === 'e' && draftRef.current === '' && !key.ctrl) {
+      setMode('estado');
+      return;
+    }
     if (input === 'n' && draftRef.current === '' && !key.ctrl) {
       if (!agents.length) {
         setBanner({ text: 'No hay agentes en agent-rack.config.json.', color: 'red' });
@@ -451,10 +487,10 @@ export function App({ client, port, agents, models = {} }) {
     const info = meta[session.sessionId] || {};
     const model = info.model || models[session.agentId] || '';
     const origin = originLabel(origins[session.sessionId]);
-    const marks = `${queues[session.sessionId]?.length ? 'Q' : ''}${noted.has(session.sessionId) ? 'N' : ''}`;
+    const marks = `${queues[session.sessionId]?.length ? 'Q' : ''}${noted.has(session.sessionId) ? 'N' : ''}${hotIds.has(session.sessionId) ? '!' : ''}`;
     const indent = depth ? `${'  '.repeat(Math.min(depth, 4))}↳ ` : '';
     const head = clip(
-      `${indent}${statusIcon(session.status)} ${shortId(session.sessionId)} ${session.agentId} ${origin} ${formatDuration(session)}${marks ? ` ${marks}` : ''}`,
+      `${indent}${statusIcon(session.status)} ${shortId(session.sessionId)} ${session.agentId}${marks ? ` ${marks}` : ''} ${origin} ${formatDuration(session)}`,
       innerLeft,
     );
     const sub = info.steeredFrom
@@ -524,15 +560,54 @@ export function App({ client, port, agents, models = {} }) {
     '          en el prompt, enter es otra línea y Ctrl+S envía',
     'i         redirigir: cancela y sigue con una instrucción nueva',
     'm         nota para el manager (silka_notes)',
+    'e         estado del workspace: rama, tareas, conflictos, decisiones',
     'c         cancelar, pide confirmación',
     '?         esta ayuda',
     'q         salir',
-    'Q en la lista: hay mensajes en cola.  N: hay notas sin leer.',
+    'Q en la lista: hay mensajes en cola.  N: hay notas sin leer.  !: conflicto de archivos.',
     '↳ une la sesión nueva con la que redirigiste, o una hija bajo quien la lanzó.',
     'El origen (tú, claude-code, codex…) dice quién abrió la sesión.',
   ];
 
-  const panels = mode === 'help'
+  const estadoLines = [];
+  if (board) {
+    estadoLines.push(board.repo
+      ? `${board.repo.branch}  @  ${board.repo.head ? board.repo.head.slice(0, 7) : 'sin commits'}`
+      : 'sin repo git');
+    if (board.graph) estadoLines.push(board.graph);
+    const conflicts = (board.conflicts || []).filter((conflict) => Date.now() - Date.parse(conflict.at) < 6 * 60 * 60 * 1000);
+    estadoLines.push(conflicts.length ? 'Conflictos' : 'Conflictos  ninguno');
+    for (const conflict of conflicts.slice(0, 4)) estadoLines.push(`! ${conflict.file}`);
+    estadoLines.push('Tareas');
+    const tasks = [...(board.tasks || [])].sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt))).slice(0, 8);
+    if (!tasks.length) estadoLines.push('sin tareas registradas');
+    for (const task of tasks) {
+      const files = [...(task.files || []), ...(task.ambiguous || []).map((file) => `${file}?`)]
+        .filter((file) => !file.startsWith('.silka/') && !file.startsWith('.git/') && !file.startsWith('graphify-out/'))
+        .slice(0, 4)
+        .join(', ');
+      estadoLines.push(`${task.status === 'running' ? '▶' : '●'} ${task.agent} ${task.from || ''} ${files || 'sin archivos'}`);
+      if (task.summary) estadoLines.push(`  ${task.summary}`);
+    }
+    estadoLines.push('Decisiones');
+    if (!board.decisions?.length) estadoLines.push('sin decisiones');
+    for (const decision of (board.decisions || []).slice(0, 3)) estadoLines.push(`${decision.author}: ${decision.text}`);
+  } else {
+    estadoLines.push('Sin workspace seleccionado.');
+  }
+
+  const panels = mode === 'estado'
+    ? h(
+      Box,
+      { flexGrow: 1, height: bodyH, borderStyle: 'single', borderColor: 'gray', paddingX: 1, flexDirection: 'column', overflow: 'hidden' },
+      h(Text, { bold: true }, 'Estado'),
+      ...estadoLines.slice(0, Math.max(1, bodyH - 3)).map((line, index) => h(
+        Text,
+        { key: `estado-${index}`, color: line.startsWith('!') ? 'red' : undefined, dimColor: line.startsWith('  '), wrap: 'truncate' },
+        clip(line, columns - 4),
+      )),
+    )
+    : mode === 'help'
     ? h(
       Box,
       { flexGrow: 1, height: bodyH, borderStyle: 'single', borderColor: 'gray', paddingX: 1, flexDirection: 'column', overflow: 'hidden' },
@@ -595,10 +670,12 @@ export function App({ client, port, agents, models = {} }) {
     h(
       Box,
       { height: composerH, borderStyle: 'single', borderColor: 'gray', paddingX: 1, flexDirection: 'column', overflow: 'hidden' },
-      composer,
+      mode === 'estado'
+        ? h(Text, { dimColor: true, wrap: 'truncate' }, 'Estado del proyecto · e o esc vuelve')
+        : composer,
     ),
     h(Text, { color: banner?.color || undefined, wrap: 'truncate' }, banner ? clip(banner.text, columns) : ' '),
-    h(Text, { dimColor: true, wrap: 'truncate' }, clip('↑↓ elegir   enter envía   n nueva   i redirigir   m nota   c cancelar   ? ayuda   q salir', columns)),
+    h(Text, { dimColor: true, wrap: 'truncate' }, clip('↑↓ elegir   enter envía   n nueva   e estado   i redirigir   m nota   c cancelar   ? ayuda   q salir', columns)),
   );
 }
 

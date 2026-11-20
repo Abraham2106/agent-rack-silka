@@ -44,6 +44,16 @@ absoluta del repo.
 - Seguimiento sobre el mismo trabajo: `agent_session_send` (retoma la misma conversación).
 - No hagas polling seguido. Revisa cuando termines tu propio trabajo.
 
+## Estado del proyecto
+El shim ya antepone un bloque corto al prompt. Si necesitas el mismo dato, o quieres dejar una decisión:
+
+- `silka_state({workspace})` — rama, HEAD, cambios de otros agentes, tareas en curso y las últimas decisiones.
+- `silka_changes({workspace, since?})` — qué cambió desde una fecha ISO. Sin `since`, las últimas 2 horas.
+- `silka_decide({workspace, text})` — anota una decisión (autor, fecha, sesión y texto).
+- `silka_decisions({workspace, limit})` — las últimas decisiones.
+
+`workspace` es la ruta absoluta del repo. No pegues archivos enteros: el bloque ya es corto.
+
 ## Verificar (ligero)
 Al revisar una sesión, llama `silka_notes`.
 Elige una:

@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { graphifyMcpLaunch } from './graph.mjs';
 import { repoRoot } from './hub.mjs';
 
 const IS_WIN = process.platform === 'win32';
@@ -161,15 +162,35 @@ function codexEntryMatches(text) {
   }
 }
 
+export function ensureCodexDepthEnv(file = path.join(os.homedir(), '.codex', 'config.toml')) {
+  if (!fs.existsSync(file)) return 'codex: no hay config.toml; SILKA_DEPTH no se reenvía y el bridge infiere al padre.';
+  const text = fs.readFileSync(file, 'utf8');
+  const header = text.match(/\[mcp_servers\.agent-rack\][^\S\r\n]*\r?\n/);
+  if (!header) return 'codex: agent-rack no está en config.toml.';
+  const section = text.match(/\[mcp_servers\.agent-rack\][\s\S]*?(?=\r?\n\[|$)/);
+  if (section && /env_vars\s*=/.test(section[0]) && /SILKA_DEPTH/.test(section[0])) {
+    return 'codex: SILKA_DEPTH ya se reenvía (env_vars).';
+  }
+  if (section && /env_vars\s*=/.test(section[0])) {
+    return 'codex: agent-rack ya tiene env_vars; no lo reemplacé. El bridge infiere la profundidad.';
+  }
+  const next = text.replace(header[0], `${header[0]}env_vars = ["SILKA_DEPTH", "SILKA_AGENT"]\n`);
+  fs.writeFileSync(file, next);
+  return 'codex: env_vars reenvía SILKA_DEPTH y SILKA_AGENT al bridge.';
+}
+
 function connectCodex({ dryRun }) {
   if (!commandExists('codex')) throw new Error('No encontré el CLI `codex`.');
   const launch = bridgeLaunch();
   const listed = run('codex', ['mcp', 'list', '--json']);
   const listText = outputOf(listed);
   if (listed.status === 0 && codexEntryMatches(listText)) {
+    const envNote = dryRun
+      ? 'codex: anotaría env_vars = ["SILKA_DEPTH", "SILKA_AGENT"] si falta.'
+      : ensureCodexDepthEnv();
     return dryRun
-      ? 'codex: agent-rack ya apunta a silka bridge; no haría cambios.'
-      : 'codex: agent-rack ya apunta a silka bridge.';
+      ? `codex: agent-rack ya apunta a silka bridge; no haría cambios.\n${envNote}`
+      : `codex: agent-rack ya apunta a silka bridge.\n${envNote}`;
   }
   const add = ['mcp', 'add', 'agent-rack', '--', launch.command, ...launch.args];
   if (dryRun) {
@@ -181,7 +202,8 @@ function connectCodex({ dryRun }) {
   if (/agent-rack/.test(listText)) run('codex', ['mcp', 'remove', 'agent-rack']);
   const added = run('codex', add);
   if (added.status !== 0) throw new Error(`codex mcp add falló.\n${outputOf(added)}`);
-  return 'codex: agent-rack ahora es silka bridge.';
+  const envNote = dryRun ? '' : ensureCodexDepthEnv();
+  return envNote ? `codex: agent-rack ahora es silka bridge.\n${envNote}` : 'codex: agent-rack ahora es silka bridge.';
 }
 
 function disconnectCodex({ dryRun }) {
@@ -315,12 +337,77 @@ const ACTIONS = {
   opencode: { connect: connectOpencode, disconnect: disconnectOpencode },
 };
 
-export function connectHarness(target, { dryRun = false } = {}) {
+function graphAlready(text, launch) {
+  const body = String(text || '').replaceAll('\\', '/').toLowerCase();
+  return body.includes(String(launch.command).replaceAll('\\', '/').toLowerCase())
+    && launch.args.every((arg) => body.includes(String(arg).replaceAll('\\', '/').toLowerCase()));
+}
+
+function connectGraphOne(name, launch, { dryRun }) {
+  if (name === 'claude') {
+    if (!commandExists('claude')) return 'graphify: no encontré el CLI claude.';
+    const add = ['mcp', 'add', '--scope', 'user', '--transport', 'stdio', 'graphify', '--', launch.command, ...launch.args];
+    const current = run('claude', ['mcp', 'get', 'graphify']);
+    if (current.status === 0 && graphAlready(outputOf(current), launch)) return 'graphify: claude ya lo tiene.';
+    if (dryRun) return `graphify: ${formatCommand(['claude', ...add])}`;
+    run('claude', ['mcp', 'remove', 'graphify']);
+    const added = run('claude', add);
+    if (added.status !== 0) return `graphify: claude mcp add falló.\n${outputOf(added)}`;
+    return 'graphify: registrado en claude.';
+  }
+  if (name === 'codex') {
+    if (!commandExists('codex')) return 'graphify: no encontré el CLI codex.';
+    const add = ['mcp', 'add', 'graphify', '--', launch.command, ...launch.args];
+    const listed = run('codex', ['mcp', 'list', '--json']);
+    if (listed.status === 0 && graphAlready(outputOf(listed), launch)) return 'graphify: codex ya lo tiene.';
+    if (dryRun) return `graphify: ${formatCommand(['codex', ...add])}`;
+    if (/graphify/.test(outputOf(listed))) run('codex', ['mcp', 'remove', 'graphify']);
+    const added = run('codex', add);
+    if (added.status !== 0) return `graphify: codex mcp add falló.\n${outputOf(added)}`;
+    return 'graphify: registrado en codex.';
+  }
+  if (name === 'cursor') {
+    const file = cursorConfigPath();
+    const parsed = fs.existsSync(file) ? readJson(file) : {};
+    const current = parsed.mcpServers?.graphify;
+    if (current && graphAlready(JSON.stringify(current), launch)) return `graphify: cursor ya lo tiene en ${file}.`;
+    if (dryRun) return `graphify: escribiría ${file} command=${launch.command}`;
+    const bak = backup(file);
+    parsed.mcpServers = parsed.mcpServers || {};
+    parsed.mcpServers.graphify = { command: launch.command, args: launch.args };
+    writeJson(file, parsed);
+    return `graphify: registrado en ${file}${bak ? ` (respaldo ${bak})` : ''}.`;
+  }
+  const files = opencodeConfigPaths();
+  const file = files.find((item) => fs.existsSync(item)) || files[0];
+  let parsed = {};
+  try { parsed = fs.existsSync(file) ? readJson(file) : {}; } catch { parsed = {}; }
+  const current = parsed.mcp?.graphify;
+  if (current && graphAlready(JSON.stringify(current), launch)) return `graphify: opencode ya lo tiene en ${file}.`;
+  if (dryRun) return `graphify: escribiría ${file}`;
+  const bak = backup(file);
+  parsed.mcp = parsed.mcp || {};
+  parsed.mcp.graphify = { type: 'local', command: [launch.command, ...launch.args], enabled: true };
+  writeJson(file, parsed);
+  return `graphify: registrado en ${file}${bak ? ` (respaldo ${bak})` : ''}.`;
+}
+
+function connectGraph(names, { dryRun, workspace }) {
+  const launch = graphifyMcpLaunch(workspace);
+  if (!launch) {
+    return 'graphify: no está instalado. Silka funciona igual. Para instalarlo: pip install --user graphifyy';
+  }
+  return names.map((name) => connectGraphOne(name, launch, { dryRun })).join('\n');
+}
+
+export function connectHarness(target, { dryRun = false, withGraph = false, workspace = process.cwd() } = {}) {
   const names = target === 'all' ? HARNESSES : [target];
   if (!names.length || names.some((name) => !ACTIONS[name])) {
     throw new Error(`Uso: silka connect <${HARNESSES.join('|')}|all>`);
   }
-  return names.map((name) => ACTIONS[name].connect({ dryRun })).join('\n');
+  const lines = names.map((name) => ACTIONS[name].connect({ dryRun }));
+  if (withGraph) lines.push(connectGraph(names, { dryRun, workspace }));
+  return lines.join('\n');
 }
 
 export function disconnectHarness(target, { dryRun = false } = {}) {

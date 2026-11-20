@@ -18,6 +18,7 @@
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import { connectHarness } from '../src/silka/connect.mjs';
+import { graphStatus } from '../src/silka/graph.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -214,6 +215,9 @@ if (!flags.noSkill) {
 }
 
 // ---- listo ------------------------------------------------------------------
+const graphLine = graphStatus(ROOT).text.split('\n')[0];
+info(`Graphify (opcional): ${graphLine}`);
+
 console.log(bold('\nListo.'));
 console.log(`  1. Asegúrate de haber iniciado sesión en cada agente (codex login · opencode auth login · cursor-agent login).`);
 console.log(`  2. Reinicia Claude Code (o abre una sesión nueva) para cargar las herramientas.`);

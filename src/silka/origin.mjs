@@ -22,7 +22,7 @@ export function originLabel(name) {
   return String(name || 'tú');
 }
 
-export function rememberOrigin(sessionId, { from, depth }) {
+export function rememberOrigin(sessionId, { from, depth, parentSessionId }) {
   if (!sessionId) return null;
   const all = readOrigins();
   const entry = {
@@ -30,6 +30,7 @@ export function rememberOrigin(sessionId, { from, depth }) {
     depth: Number.isFinite(Number(depth)) ? Number(depth) : 0,
     at: new Date().toISOString(),
   };
+  if (parentSessionId && parentSessionId !== sessionId) entry.parentSessionId = parentSessionId;
   all[sessionId] = entry;
   const file = originsFile();
   fs.mkdirSync(path.dirname(file), { recursive: true });

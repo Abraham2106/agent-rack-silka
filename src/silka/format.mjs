@@ -192,6 +192,11 @@ export function nestSessions(sessions, origins = {}, meta = {}) {
   const byId = new Map(list.map((session) => [session.sessionId, session]));
   const parentOf = new Map();
   for (const session of list) {
+    const linked = origins[session.sessionId]?.parentSessionId;
+    if (linked && byId.has(linked) && linked !== session.sessionId) {
+      parentOf.set(session.sessionId, linked);
+      continue;
+    }
     const steered = meta[session.sessionId]?.steeredFrom;
     if (steered && byId.has(steered) && steered !== session.sessionId) {
       parentOf.set(session.sessionId, steered);

@@ -14,11 +14,14 @@ function printHelp() {
   silka ui
   silka mcp
   silka bridge
-  silka connect <claude|codex|cursor|opencode|all> [--dry-run]
+  silka connect <claude|codex|cursor|opencode|all> [--dry-run] [--with-graph]
   silka disconnect <claude|codex|cursor|opencode|all> [--dry-run]
+  silka graph status [workspace]
+  silka graph build [workspace]
 
 Sin hub, los comandos responden: corre: silka hub
-bridge es el MCP por stdio que comparte ese hub.`);
+bridge es el MCP por stdio que comparte ese hub.
+graph build usa Graphify si está instalado; sin él, silka sigue igual.`);
 }
 
 async function main() {
@@ -42,12 +45,29 @@ async function main() {
     await startBridge();
     return 'stay';
   }
+  if (cmd === 'graph') {
+    const { buildGraph, graphStatus } = await import('./graph.mjs');
+    const sub = argv[1];
+    const workspace = argv.slice(2).find((arg) => !arg.startsWith('--')) || process.cwd();
+    if (sub === 'status') {
+      console.log(graphStatus(workspace).text);
+      return;
+    }
+    if (sub === 'build') {
+      console.log(buildGraph(workspace));
+      return;
+    }
+    throw new Error('Uso: silka graph build|status [workspace]');
+  }
   if (cmd === 'connect' || cmd === 'disconnect') {
     const { connectHarness, disconnectHarness } = await import('./connect.mjs');
     const dryRun = argv.includes('--dry-run');
+    const withGraph = argv.includes('--with-graph');
     const target = argv.slice(1).find((arg) => !arg.startsWith('--'));
-    if (!target) throw new Error(`Uso: silka ${cmd} <claude|codex|cursor|opencode|all> [--dry-run]`);
-    const text = cmd === 'connect' ? connectHarness(target, { dryRun }) : disconnectHarness(target, { dryRun });
+    if (!target) throw new Error(`Uso: silka ${cmd} <claude|codex|cursor|opencode|all> [--dry-run] [--with-graph]`);
+    const text = cmd === 'connect'
+      ? connectHarness(target, { dryRun, withGraph, workspace: process.cwd() })
+      : disconnectHarness(target, { dryRun });
     console.log(text);
     return;
   }

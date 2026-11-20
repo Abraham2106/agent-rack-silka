@@ -26,6 +26,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { beginTurn, finishTurn, oneLine } from '../src/silka/state.mjs';
 
 const IS_WIN = process.platform === 'win32';
 const [target, ...rest] = process.argv.slice(2);
@@ -59,6 +60,68 @@ function silkaChildEnv(agent, rawPrompt) {
   const base = mark.depth ?? Number(process.env.SILKA_DEPTH || 0);
   const depth = Number.isFinite(base) ? base + 1 : 1;
   return { SILKA_DEPTH: String(depth), SILKA_AGENT: agent };
+}
+
+function attachTurn(agent, rawPrompt) {
+  const mark = readSilkaMark(rawPrompt);
+  try {
+    const turn = beginTurn({
+      workspace: process.cwd(),
+      agent,
+      from: mark.from || process.env.SILKA_AGENT || 'tú',
+      prompt: mark.prompt,
+    });
+    return { prompt: turn.prompt, turnId: turn.id };
+  } catch {
+    return { prompt: mark.prompt, turnId: null };
+  }
+}
+
+function closeTurn(turnId, status, summary) {
+  if (!turnId) return;
+  try {
+    finishTurn({ workspace: process.cwd(), id: turnId, status, summary: oneLine(summary, 80) });
+  } catch { /* el registro no debe tumbar al agente */ }
+}
+
+export function codexStep(item) {
+  const itemType = String(item?.type || '');
+  if (itemType === 'command_execution' || itemType === 'shell') {
+    const command = item.command || item.cmd || '';
+    return command ? `→ $ ${clipStep(command)}` : '→ $';
+  }
+  if (itemType === 'mcp_tool_call' || itemType === 'mcp') {
+    const server = item.server || item.mcp || '';
+    const tool = item.tool || item.name || item.tool_name || '';
+    const label = [server, tool].filter(Boolean).join('.');
+    return `→ mcp ${label || 'tool'}`;
+  }
+  const name = String(item?.name || item?.tool || '');
+  if (itemType === 'function_call' || itemType === 'tool_call' || itemType === 'local_shell_call') {
+    if (/shell|bash|command/.test(name) || item.command) return `→ $ ${clipStep(item.command || name)}`;
+    if (/mcp/i.test(name)) return `→ mcp ${clipStep(name, 60)}`;
+    return name ? `→ ${clipStep(name, 60)}` : '';
+  }
+  if (itemType === 'file_change' && Array.isArray(item.changes)) {
+    const file = item.changes.map((change) => change?.path).find(Boolean) || '';
+    return file ? `→ edit ${clipStep(file)}` : '';
+  }
+  if (itemType === 'web_search') return item.query ? `→ search ${clipStep(item.query, 60)}` : '';
+  return '';
+}
+
+/** El stdout de Codex se queda con el hilo y el mensaje final. El resto sale como paso. */
+export function classifyCodexEvent(data) {
+  if (!data || typeof data !== 'object') return { keep: false, step: '' };
+  const type = String(data.type || '');
+  if (type === 'thread.started' || type === 'error' || type === 'turn.failed') return { keep: true, step: '' };
+  if (type !== 'item.started' && type !== 'item.completed') return { keep: false, step: '' };
+  const item = data.item || {};
+  if (String(item.type || '') === 'agent_message') {
+    return type === 'item.completed' ? { keep: false, step: '', final: true } : { keep: false, step: '' };
+  }
+  const step = type === 'item.started' ? '' : codexStep(item);
+  return { keep: false, step };
 }
 
 function emit(obj, code) {
@@ -375,10 +438,18 @@ function opencodeSpec() {
   if (model) args.push('-m', model);
   if (opts.resume) args.push('-s', opts.resume);
   if (readOnly) args.push('--agent', 'plan');
-  const clean = readSilkaMark(prompt).prompt;
+  const turned = attachTurn('opencode', prompt);
   // OpenCode resuelve rutas relativas contra la raíz del repo git, no contra el cwd.
-  args.push(`[Directorio de trabajo: ${process.cwd()} (las rutas relativas son relativas a este directorio)]\n\n${clean}`);
-  return { cmd: l.cmd, args: [...l.pre, ...args], kind: 'opencode', env: silkaChildEnv('opencode', prompt) };
+  const text = `[Directorio de trabajo: ${process.cwd()} (las rutas relativas son relativas a este directorio)]\n\n${turned.prompt}`;
+  args.push(text);
+  return {
+    cmd: l.cmd,
+    args: [...l.pre, ...args],
+    kind: 'opencode',
+    env: silkaChildEnv('opencode', prompt),
+    turnId: turned.turnId,
+    promptText: text,
+  };
 }
 
 function cursorSpec() {
@@ -391,12 +462,15 @@ function cursorSpec() {
   if (opts.resume) args.push('--resume', opts.resume);
   if (readOnly) args.push('--mode', 'plan');
   else args.push('--force'); // con -p y sin --force los comandos de shell quedan bloqueados
-  args.push(readSilkaMark(prompt).prompt);
+  const turned = attachTurn('cursor', prompt);
+  args.push(turned.prompt);
   return {
     cmd: l.cmd,
     args: [...l.pre, ...args],
     kind: 'cursor',
     env: { CURSOR_INVOKED_AS: 'cursor-agent', ...silkaChildEnv('cursor', prompt) },
+    turnId: turned.turnId,
+    promptText: turned.prompt,
   };
 }
 
@@ -409,15 +483,74 @@ function runCodex(argv) {
   if (!l) { process.stderr.write('No encontré Codex en el PATH (npm i -g @openai/codex o define CODEX_BIN).\n'); process.exit(127); }
   const args = argv[0] === 'resume' && argv[1] === 'exec' ? ['exec', 'resume', ...argv.slice(2)] : [...argv];
   const rawPrompt = args.at(-1) ?? '';
-  if (args.length) args[args.length - 1] = readSilkaMark(rawPrompt).prompt;
+  const turned = attachTurn('codex', rawPrompt);
+  if (args.length) args[args.length - 1] = turned.prompt;
   const child = spawn(l.cmd, [...l.pre, ...args], {
-    stdio: ['ignore', 'inherit', 'inherit'],
+    stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
     env: { ...process.env, ...silkaChildEnv('codex', rawPrompt) },
   });
+  const held = { final: '', text: '' };
+  let out = '';
+  let err = '';
+  let buf = '';
+  const take = (line) => {
+    const trimmed = line.replace(/\r$/, '');
+    if (!trimmed.trim()) return;
+    let data;
+    try { data = JSON.parse(trimmed); } catch {
+      const step = clipStep(trimmed, 120);
+      if (step) process.stderr.write(`${step}\n`);
+      err += `${step}\n`;
+      return;
+    }
+    const kind = classifyCodexEvent(data);
+    if (kind.final) {
+      if (held.final) {
+        const step = `✎ ${clipStep(held.text, 88)}`;
+        process.stderr.write(`${step}\n`);
+        err += `${step}\n`;
+      }
+      held.final = trimmed;
+      held.text = String(data.item?.text || '');
+      return;
+    }
+    if (kind.keep) {
+      process.stdout.write(`${trimmed}\n`);
+      out += `${trimmed}\n`;
+    }
+    if (kind.step) {
+      process.stderr.write(`${kind.step}\n`);
+      err += `${kind.step}\n`;
+    }
+  };
+  child.stdout.on('data', (chunk) => {
+    buf += chunk.toString('utf8');
+    let nl = buf.indexOf('\n');
+    while (nl >= 0) {
+      take(buf.slice(0, nl));
+      buf = buf.slice(nl + 1);
+      nl = buf.indexOf('\n');
+    }
+  });
+  child.stderr.on('data', (chunk) => {
+    const text = chunk.toString('utf8');
+    err += text;
+    process.stderr.write(text);
+  });
   for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => child.kill());
   child.on('error', (e) => { process.stderr.write(`No pude iniciar codex: ${e.message}\n`); process.exit(127); });
-  child.on('close', (code) => process.exit(code ?? 1));
+  child.on('close', (code) => {
+    if (buf.trim()) take(buf);
+    if (held.final) {
+      process.stdout.write(`${held.final}\n`);
+      out += `${held.final}\n`;
+    }
+    const status = code ? 'failed' : 'done';
+    closeTurn(turned.turnId, status, held.text);
+    writeLog({ cmd: l.cmd, args, promptText: turned.prompt }, code, out, err);
+    process.exit(code ?? 1);
+  });
 }
 
 function writeLog(spec, code, out, err) {
@@ -426,7 +559,7 @@ function writeLog(spec, code, out, err) {
     const logDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'logs');
     fs.mkdirSync(logDir, { recursive: true });
     fs.writeFileSync(path.join(logDir, `last-${target}.log`),
-      `cwd=${process.cwd()}\ncmd=${spec.cmd} ${spec.args.slice(0, -1).join(' ')} <prompt>\nexit=${code}\n--- stdout\n${out}\n--- stderr\n${err}`);
+      `cwd=${process.cwd()}\ncmd=${spec.cmd} ${spec.args.slice(0, -1).join(' ')} <prompt>\nexit=${code}\n--- prompt\n${String(spec.promptText || '').slice(0, 8000)}\n--- stdout\n${out}\n--- stderr\n${err}`);
   } catch { /* el log es opcional */ }
 }
 
@@ -486,6 +619,7 @@ function runTranslated(spec) {
     publish(state, flushText(state));
     writeLog(spec, code, out, err);
     const result = spec.kind === 'cursor' ? finishCursor(state, out, err) : finishOpencode(state);
+    closeTurn(spec.turnId, result.is_error ? 'failed' : 'done', result.result);
     emit(result, result.is_error ? (code || 1) : 0);
   });
 }

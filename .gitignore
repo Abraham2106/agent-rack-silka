@@ -1,5 +1,7 @@
 node_modules/
 sandbox/
+.silka/
+graphify-out/
 shims/logs/
 smoke-*.txt
 # generado por npm run setup (rutas locales)

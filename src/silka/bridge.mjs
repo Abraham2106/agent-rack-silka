@@ -4,9 +4,11 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { sseTransportInit } from 'agent-rack/dist/security/auth.js';
+import { isBusy } from './format.mjs';
 import { ensureHub } from './hub.mjs';
 import { unreadNotes } from './notes.mjs';
-import { rememberOrigin } from './origin.mjs';
+import { originLabel, readOrigins, rememberOrigin } from './origin.mjs';
+import { appendDecision, formatBlock, formatChanges, formatDecisions, samePath } from './state.mjs';
 
 const SILKA_MARK = /^\[silka depth=\d+ from=[^\]]*\]\s*/;
 
@@ -28,6 +30,82 @@ const NOTES_TOOL = {
   },
 };
 
+const WORKSPACE = {
+  type: 'string',
+  description: 'Ruta absoluta del workspace.',
+};
+
+const STATE_TOOLS = [
+  {
+    name: 'silka_state',
+    description: 'Resumen compacto del estado del proyecto: rama, HEAD, cambios de otros agentes, tareas en curso y últimas decisiones.',
+    inputSchema: {
+      type: 'object',
+      properties: { workspace: WORKSPACE },
+      required: ['workspace'],
+    },
+  },
+  {
+    name: 'silka_changes',
+    description: 'Archivos y resúmenes que registraron los agentes desde una fecha ISO. Sin since, usa las últimas 2 horas.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: WORKSPACE,
+        since: { type: 'string', description: 'Fecha ISO. Por defecto, hace 2 horas.' },
+      },
+      required: ['workspace'],
+    },
+  },
+  {
+    name: 'silka_decide',
+    description: 'Anota una decisión del proyecto con autor, fecha y sesión.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: WORKSPACE,
+        text: { type: 'string', description: 'La decisión, en una frase.' },
+      },
+      required: ['workspace', 'text'],
+    },
+  },
+  {
+    name: 'silka_decisions',
+    description: 'Últimas decisiones anotadas en el workspace.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: WORKSPACE,
+        limit: { type: 'number', description: 'Cuántas devolver. Por defecto 10.' },
+      },
+      required: ['workspace'],
+    },
+  },
+];
+
+function textResult(text, isError = false) {
+  return { content: [{ type: 'text', text: String(text) }], ...(isError ? { isError: true } : {}) };
+}
+
+function workspaceOf(args) {
+  const value = args?.workspace || args?.cwd || '';
+  return value ? String(value) : '';
+}
+
+export function resolveLineage({ envDepth = 0, from, workspace, sessions = [], origins = {} }) {
+  const label = originLabel(from);
+  const running = sessions.filter((session) => {
+    if (!isBusy(session.status)) return false;
+    if (originLabel(session.agentId) !== label || label === 'tú') return false;
+    if (workspace && session.workspace && !samePath(session.workspace, workspace)) return false;
+    return true;
+  }).sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0));
+  const parent = running[0] || null;
+  const parentDepth = parent ? Number(origins[parent.sessionId]?.depth ?? 0) : 0;
+  const depth = envDepth > 0 ? envDepth : (parent ? parentDepth + 1 : 0);
+  return { depth, parentSessionId: parent?.sessionId || '' };
+}
+
 export function currentDepth() {
   const value = Number(process.env.SILKA_DEPTH ?? 0);
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
@@ -45,8 +123,7 @@ export function isDelegatingTool(name) {
     || /_run$/.test(name);
 }
 
-export function depthBlockMessage() {
-  const depth = currentDepth();
+export function depthBlockMessage(depth = currentDepth()) {
   const max = maxDepth();
   return `No se puede delegar: SILKA_DEPTH=${depth} ya alcanzó el máximo (${max}). Un sub-agente no lanza otro.`;
 }
@@ -96,20 +173,46 @@ function parseJson(text) {
   }
 }
 
-async function hubSessionIds(hub) {
-  const result = await hub.callTool({ name: 'agent_session_list', arguments: {} }, undefined, { timeout: 20_000 });
-  const text = result.content?.find((item) => item.type === 'text')?.text ?? '[]';
-  const parsed = parseJson(text);
-  return sessionIdsIn(Array.isArray(parsed) ? parsed : []);
-}
-
-function rememberNewSessions(before, after, resultText, from, depth) {
+function rememberNewSessions(before, after, resultText, from, depth, parentSessionId) {
   const ids = new Set(after);
   for (const id of sessionIdsIn(parseJson(resultText))) ids.add(id);
   for (const id of ids) {
     if (before.has(id)) continue;
-    rememberOrigin(id, { from, depth });
+    rememberOrigin(id, { from, depth, parentSessionId });
   }
+}
+
+async function hubSessions(hub) {
+  const result = await hub.callTool({ name: 'agent_session_list', arguments: {} }, undefined, { timeout: 20_000 });
+  const text = result.content?.find((item) => item.type === 'text')?.text ?? '[]';
+  const parsed = parseJson(text);
+  return Array.isArray(parsed) ? parsed : [];
+}
+
+function localTool(name, args, from, sessions) {
+  const workspace = workspaceOf(args);
+  if (!workspace) return textResult('Falta workspace.', true);
+  if (name === 'silka_state') return textResult(formatBlock(workspace));
+  if (name === 'silka_changes') {
+    try { return textResult(formatChanges(workspace, args.since)); }
+    catch (err) { return textResult(err instanceof Error ? err.message : String(err), true); }
+  }
+  if (name === 'silka_decide') {
+    try {
+      const parent = resolveLineage({ envDepth: 0, from, workspace, sessions, origins: readOrigins() });
+      const row = appendDecision({
+        workspace,
+        text: args.text,
+        author: from,
+        sessionId: parent.parentSessionId,
+      });
+      return textResult(`${row.at} ${row.author}: ${row.text}`);
+    } catch (err) {
+      return textResult(err instanceof Error ? err.message : String(err), true);
+    }
+  }
+  if (name === 'silka_decisions') return textResult(formatDecisions(workspace, args.limit));
+  return null;
 }
 
 export async function startBridge() {
@@ -119,7 +222,11 @@ export async function startBridge() {
   await hub.connect(sse);
   const listed = await hub.listTools(undefined, { timeout: 20_000 });
   const hubTools = listed.tools ?? [];
-  const tools = [...hubTools.filter((tool) => tool.name !== 'silka_notes'), NOTES_TOOL];
+  const tools = [
+    ...hubTools.filter((tool) => tool.name !== 'silka_notes' && !tool.name.startsWith('silka_')),
+    NOTES_TOOL,
+    ...STATE_TOOLS,
+  ];
 
   const server = new Server({ name: 'agent-rack', version: '0.1.0' }, { capabilities: { tools: {} } });
   server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -141,28 +248,41 @@ export async function startBridge() {
       const notes = unreadNotes({ sessionId: args.sessionId, markRead: args.markRead !== false });
       return { content: [{ type: 'text', text: JSON.stringify(notes) }] };
     }
-    if (isDelegatingTool(name) && currentDepth() >= maxDepth()) {
-      return { content: [{ type: 'text', text: depthBlockMessage() }], isError: true };
+    const from = callerFrom(server.getClientVersion());
+    let sessions = [];
+    let listed = false;
+    if (name.startsWith('silka_') || isDelegatingTool(name)) {
+      try {
+        sessions = await hubSessions(hub);
+        listed = true;
+      } catch { /* el estado local no depende del hub */ }
+    }
+    const local = localTool(name, args, from, sessions);
+    if (local) return local;
+    const lineage = resolveLineage({
+      envDepth: currentDepth(),
+      from,
+      workspace: workspaceOf(args),
+      sessions,
+      origins: readOrigins(),
+    });
+    if (isDelegatingTool(name) && lineage.depth >= maxDepth()) {
+      return { content: [{ type: 'text', text: depthBlockMessage(lineage.depth) }], isError: true };
     }
     const known = tools.some((tool) => tool.name === name);
     if (!known) {
       return { content: [{ type: 'text', text: `Herramienta desconocida: ${name}` }], isError: true };
     }
-    const from = callerFrom(server.getClientVersion());
-    const depth = currentDepth();
-    const stamped = stampArgs(name, args, depth, from);
-    let before = new Set();
-    if (isDelegatingTool(name)) {
-      try { before = await hubSessionIds(hub); } catch { /* el diff es un respaldo */ }
-    }
+    const stamped = stampArgs(name, args, lineage.depth, from);
+    const before = new Set(sessions.map((session) => session.sessionId));
     const result = await hub.callTool({ name, arguments: stamped }, undefined, { timeout: callTimeout(stamped) });
-    if (isDelegatingTool(name) && !result.isError) {
+    if (isDelegatingTool(name) && listed && !result.isError) {
       const text = result.content?.map((item) => item.text || '').join('\n') ?? '';
       try {
-        const after = await hubSessionIds(hub);
-        rememberNewSessions(before, after, text, from, depth);
+        const after = (await hubSessions(hub)).map((session) => session.sessionId);
+        rememberNewSessions(before, after, text, from, lineage.depth, lineage.parentSessionId);
       } catch {
-        rememberNewSessions(before, before, text, from, depth);
+        rememberNewSessions(before, before, text, from, lineage.depth, lineage.parentSessionId);
       }
     }
     return result;
