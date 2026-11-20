@@ -36,8 +36,8 @@ Entrega:
    - Sin parpadeos y usable en una terminal de 100 columnas.
    - Que se vea profesional, sobrio y consistente.
 
-Prueba (córrela tú y deja todo apagado al final):
-- Levanta el hub (`node src/silka/cli.mjs hub` en segundo plano).
+Prueba (córrela tú):
+- IMPORTANTE: ya hay un hub vivo en el puerto 8987 y TU PROPIA sesión corre dentro de él. No lo apagues, no lo reinicies ni mates procesos node; úsalo para las pruebas. Los cambios del shim aplican a cada sesión nueva sin reiniciar. Cancela solo las sesiones de prueba que tú crees.
 - `run cursor "lista los archivos de src/silka y di cuántos hay"` con `--model grok-4.7-medium-fast`: mientras corre, `getSessionLogs` debe mostrar pasos (`→ …`), y el summary final debe ser corto.
 - `steer` sobre una sesión running de opencode crea la sesión nueva con la instrucción.
 - `note` + llamar `silka_notes` con un cliente MCP de prueba devuelve la nota.
