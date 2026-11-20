@@ -62,7 +62,7 @@ function promptsFile(port) {
   return path.join(path.dirname(tokenFilePath(port)), 'silka-prompts.json');
 }
 
-export function readPrompts(port) {
+function readPromptFile(port) {
   try {
     const parsed = JSON.parse(fs.readFileSync(promptsFile(port), 'utf8'));
     return parsed && typeof parsed === 'object' ? parsed : {};
@@ -71,13 +71,46 @@ export function readPrompts(port) {
   }
 }
 
-export function rememberPrompt(port, sessionId, prompt) {
+function normalizeMeta(value) {
+  if (typeof value === 'string') return { prompt: value, model: '', steeredFrom: '' };
+  if (value && typeof value === 'object') {
+    return {
+      prompt: String(value.prompt ?? ''),
+      model: String(value.model ?? ''),
+      steeredFrom: String(value.steeredFrom ?? ''),
+    };
+  }
+  return { prompt: '', model: '', steeredFrom: '' };
+}
+
+export function readMeta(port) {
+  const raw = readPromptFile(port);
+  const meta = {};
+  for (const [id, value] of Object.entries(raw)) meta[id] = normalizeMeta(value);
+  return meta;
+}
+
+export function readPrompts(port) {
+  const meta = readMeta(port);
+  return Object.fromEntries(Object.entries(meta).map(([id, item]) => [id, item.prompt]));
+}
+
+export function rememberSession(port, sessionId, fields) {
   if (!sessionId) return;
-  const all = readPrompts(port);
-  all[sessionId] = String(prompt ?? '');
+  const all = readPromptFile(port);
+  const prev = normalizeMeta(all[sessionId]);
+  all[sessionId] = {
+    prompt: fields.prompt !== undefined ? String(fields.prompt) : prev.prompt,
+    model: fields.model !== undefined ? String(fields.model) : prev.model,
+    steeredFrom: fields.steeredFrom !== undefined ? String(fields.steeredFrom) : prev.steeredFrom,
+  };
   const file = promptsFile(port);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `${JSON.stringify(all)}\n`);
+}
+
+export function rememberPrompt(port, sessionId, prompt) {
+  rememberSession(port, sessionId, { prompt });
 }
 
 export function hubStatus() {

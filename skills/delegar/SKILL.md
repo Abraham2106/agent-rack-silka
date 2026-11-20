@@ -41,6 +41,7 @@ absoluta del repo.
 - No hagas polling seguido. Revisa cuando termines tu propio trabajo.
 
 ## Verificar (ligero)
+Al revisar una sesión, llama `silka_notes`.
 Elige una:
 1. Mira `git diff --stat` y corre tú el comando de prueba.
 2. Pídele a otro agente `agent_review` (solo lectura, devuelve `verdict` y `findings`).

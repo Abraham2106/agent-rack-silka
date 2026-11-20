@@ -87,19 +87,25 @@ npm run silka -- hub
 npm run silka -- ls
 npm run silka -- run opencode "responde solo: ok" --model opencode/hy4-flash-free --workspace .
 npm run silka -- send <id> "responde solo: dos"
+npm run silka -- steer <id> "no toques README.md"
+npm run silka -- note <id> "revisa el diff antes de aceptar"
 npm run silka -- ui
+npm run silka -- mcp
 ```
 
 `hub` usa `agent-rack.config.json` y escucha en `http://127.0.0.1:8987/sse` (o el `port` de la config). Si ya hay un hub con token y pid válidos, lo dice y sale sin error.
 
-En `ui`, ↑/↓ elige sesión. El estado se pinta según esté `running`, `completed` o `failed`. A la derecha va la actividad (últimas líneas, cada 1–2 s) y abajo una caja de texto: Enter envía; si el turno sigue `running`, el mensaje queda **en cola** y se manda solo al terminar. `n` crea una sesión (agente, modelo opcional, prompt), `c` cancela y `q` sale. Sin hub, el error dice `corre: silka hub`.
+`steer` cancela la sesión y abre otra con el mismo agente, modelo y workspace. El prompt nuevo lleva la instrucción del usuario y pide seguir desde los archivos como están: agent-rack no reanuda una sesión cancelada. `note` guarda una nota en `~/.config/silka/notes.jsonl`. `mcp` expone `silka_notes` para que el manager las lea.
+
+En `ui`, el encabezado muestra el puerto del hub (vivo o caído) y cuántas sesiones hay. ↑/↓ elige. Cada fila tiene ícono y color según el estado, el agente, el modelo, el tiempo y una marca si hay mensajes en cola (`Q`) o notas (`N`). A la derecha va la actividad en vivo (pasos cortos, no JSON) con el resumen debajo cuando termina. Abajo, Enter envía; si el turno sigue `running`, el mensaje queda **en cola**. `n` crea una sesión (agente con flechas, modelo opcional, prompt multilínea: Enter es otra línea y Ctrl+S envía). `i` redirige, `m` deja una nota, `c` cancela con confirmación, `?` abre la ayuda y `q` sale. Sin hub, el error dice `corre: silka hub`.
 
 ## Cómo funciona
 
 - [`shims/agent-shim.mjs`](shims/agent-shim.mjs) es el puente:
   - **Codex**: passthrough a `codex exec --json`, que agent-rack ya entiende. El shim resuelve el binario real y lo lanza sin shell.
-  - **OpenCode**: `opencode run --format json`, traducido al formato JSON de Claude Code. Le indica el directorio de trabajo, porque OpenCode resuelve rutas relativas contra la raíz del repo git.
-  - **Cursor**: `cursor-agent -p --output-format json --trust`. `mode=plan` se traduce a `--mode plan` (solo lectura) y la escritura a `--force`.
+  - **OpenCode**: `opencode run --format json`, leído línea por línea y traducido al formato JSON de Claude Code. Le indica el directorio de trabajo, porque OpenCode resuelve rutas relativas contra la raíz del repo git.
+  - **Cursor**: `cursor-agent -p --output-format stream-json --stream-partial-output --trust`, leído línea por línea. `mode=plan` se traduce a `--mode plan` (solo lectura) y la escritura a `--force`.
+  - **Actividad en vivo**: cada paso de Cursor y OpenCode sale al momento por stderr (`→ read src/x.ts`, `→ $ npm test`, `✎ texto`). stdout queda en la línea final `{"type":"result",...}`, así el resumen del manager sigue corto.
   - En Windows lee el `.cmd` de npm en el PATH para encontrar el `.exe` o `.js` real. Así el prompt llega intacto (saltos de línea, comillas, `&`, `%`) y sigue funcionando aunque el CLI se actualice y cambie de ruta.
   - La salida cruda de la última corrida queda en `shims/logs/last-<agente>.log` para depurar.
 - `agent-rack.config.json` lo genera el setup con rutas absolutas locales (está en `.gitignore`). Hay un ejemplo en [`agent-rack.config.example.json`](agent-rack.config.example.json).

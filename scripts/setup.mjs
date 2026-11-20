@@ -173,6 +173,18 @@ if (flags.noRegister || !hasClaude) {
   else { warn('No pude registrar el MCP automáticamente:'); console.log(r.stdout + r.stderr); }
 }
 
+const SILKA_MCP = path.join(ROOT, 'src', 'silka', 'mcp.mjs').replaceAll('\\', '/');
+const silkaAdd = ['mcp', 'add', '--scope', scope, 'silka', '--', 'node', SILKA_MCP];
+if (flags.noRegister || !hasClaude) {
+  if (!hasClaude) warn('No encontré el CLI `claude`. Registra el MCP de silka a mano:');
+  console.log('\n  claude ' + silkaAdd.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' ') + '\n');
+} else {
+  spawnSync('claude', ['mcp', 'remove', 'silka', '--scope', scope], { stdio: 'ignore', shell: IS_WIN });
+  const r = spawnSync('claude', silkaAdd.map((a) => (IS_WIN && /\s/.test(a) ? `"${a}"` : a)), { encoding: 'utf8', shell: IS_WIN });
+  if (r.status === 0) ok(`silka registrado en Claude Code (scope: ${scope})`);
+  else { warn('No pude registrar el MCP de silka automáticamente:'); console.log(r.stdout + r.stderr); }
+}
+
 // ---- 5. skill ---------------------------------------------------------------
 if (!flags.noSkill) {
   const src = path.join(ROOT, 'skills', 'delegar');

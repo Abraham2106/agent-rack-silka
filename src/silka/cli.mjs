@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { listSessionsCommand, runSession, sendMessage } from './commands.mjs';
+import { listSessionsCommand, noteSession, runSession, sendMessage, steerSession } from './commands.mjs';
 import { startHub, withClient } from './hub.mjs';
 
 function printHelp() {
@@ -9,7 +9,10 @@ function printHelp() {
   silka ls
   silka run <agente> "<prompt>" [--model m] [--workspace dir]
   silka send <id> "<mensaje>"
+  silka steer <id> "<instrucción>"
+  silka note <id> "<texto>"
   silka ui
+  silka mcp
 
 Sin hub, los comandos responden: corre: silka hub`);
 }
@@ -25,7 +28,12 @@ async function main() {
     await startHub();
     return;
   }
-  if (!['ls', 'run', 'send', 'ui'].includes(cmd)) {
+  if (cmd === 'mcp') {
+    const { startMcp } = await import('./mcp.mjs');
+    await startMcp();
+    return 'stay';
+  }
+  if (!['ls', 'run', 'send', 'steer', 'note', 'ui'].includes(cmd)) {
     printHelp();
     throw new Error(`Comando desconocido: ${cmd}`);
   }
@@ -33,13 +41,17 @@ async function main() {
     if (cmd === 'ls') return listSessionsCommand(client, status.port);
     if (cmd === 'run') return runSession(client, status, argv.slice(1));
     if (cmd === 'send') return sendMessage(client, argv.slice(1));
+    if (cmd === 'steer') return steerSession(client, status, argv.slice(1));
+    if (cmd === 'note') return noteSession(client, argv.slice(1));
     const { runUi } = await import('./ui.mjs');
-    return runUi({ client, port: status.port, agents: status.agents });
+    const models = Object.fromEntries(status.agents.map((id) => [id, status.config.agents?.[id]?.model || '']));
+    return runUi({ client, port: status.port, agents: status.agents, models });
   });
 }
 
 main()
-  .then(() => {
+  .then((stay) => {
+    if (stay === 'stay') return;
     process.exit(process.exitCode ?? 0);
   })
   .catch((err) => {

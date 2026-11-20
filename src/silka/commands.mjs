@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { formatDuration, isBusy, pad, promptPreview, shortId } from './format.mjs';
-import { readPrompts, rememberPrompt } from './hub.mjs';
+import { readMeta, readPrompts, rememberSession } from './hub.mjs';
+import { appendNote } from './notes.mjs';
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -67,8 +68,70 @@ export async function runSession(client, status, argv) {
   const created = await client.createSession(agent, prompt, workspace, flags.model || undefined);
   const sessionId = created?.sessionId;
   if (!sessionId) throw new Error('El hub no devolvió un sessionId.');
-  rememberPrompt(status.port, sessionId, prompt);
+  rememberSession(status.port, sessionId, { prompt, model: flags.model || '' });
   console.log(sessionId);
+}
+
+export function buildSteerPrompt(original, instruction) {
+  const base = String(original ?? '').trim();
+  const next = String(instruction ?? '').trim();
+  return [
+    base,
+    `INSTRUCCIÓN NUEVA DEL USUARIO (tiene prioridad): ${next}`,
+    'Continúa desde el estado actual de los archivos; no rehagas lo que ya está bien.',
+  ].filter((part, index) => index !== 0 || part).join('\n\n');
+}
+
+async function waitUntilSettled(client, sessionId) {
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    const list = await client.listSessions();
+    const current = (Array.isArray(list) ? list : []).find((session) => session.sessionId === sessionId);
+    if (!current || !isBusy(current.status)) return;
+    await sleep(300);
+  }
+}
+
+export async function steerSession(client, status, argv) {
+  const { positional } = parseArgs(argv);
+  const id = positional[0];
+  const instruction = positional.slice(1).join(' ').trim();
+  if (!id || !instruction) throw new Error('Uso: silka steer <id> "<instrucción>"');
+  const sessions = await client.listSessions();
+  const session = matchSession(Array.isArray(sessions) ? sessions : [], id);
+  const createdId = await redirectSession(client, status, session, instruction);
+  console.log(createdId);
+}
+
+export async function redirectSession(client, status, session, instruction) {
+  const text = String(instruction ?? '').trim();
+  if (!text) throw new Error('La instrucción está vacía.');
+  await client.cancelSession(session.sessionId);
+  await waitUntilSettled(client, session.sessionId);
+  const meta = readMeta(status.port)[session.sessionId] || {};
+  const model = meta.model || status.config?.agents?.[session.agentId]?.model || undefined;
+  const prompt = buildSteerPrompt(meta.prompt || '', text);
+  const workspace = session.workspace || process.cwd();
+  const created = await client.createSession(session.agentId, prompt, workspace, model);
+  const sessionId = created?.sessionId;
+  if (!sessionId) throw new Error('El hub no devolvió un sessionId.');
+  rememberSession(status.port, sessionId, {
+    prompt,
+    model: model || '',
+    steeredFrom: session.sessionId,
+  });
+  return sessionId;
+}
+
+export async function noteSession(client, argv) {
+  const { positional } = parseArgs(argv);
+  const id = positional[0];
+  const text = positional.slice(1).join(' ').trim();
+  if (!id || !text) throw new Error('Uso: silka note <id> "<texto>"');
+  const sessions = await client.listSessions();
+  const session = matchSession(Array.isArray(sessions) ? sessions : [], id);
+  const note = appendNote({ sessionId: session.sessionId, text });
+  console.log(note.id);
 }
 
 function stillRunning(message) {
