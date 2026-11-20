@@ -92,6 +92,7 @@ async function waitUntilSettled(client, sessionId) {
     if (!current || !isBusy(current.status)) return;
     await sleep(300);
   }
+  throw new Error(`La sesión ${shortId(sessionId)} sigue en curso. No abrí otra.`);
 }
 
 export async function steerSession(client, status, argv) {

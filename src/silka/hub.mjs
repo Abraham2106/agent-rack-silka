@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { DashboardRemoteClient } from 'agent-rack/dist/cli/dashboard/remoteClient.js';
 import { DEFAULT_SSE_PORT } from 'agent-rack/dist/config/schema.js';
 import { tokenFilePath } from 'agent-rack/dist/security/auth.js';
+import { withFileLock, writeAtomic } from './lock.mjs';
+import { signalProcessTree } from './proc.mjs';
 
 export const HUB_HINT = 'corre: silka hub';
 
@@ -97,16 +99,17 @@ export function readPrompts(port) {
 
 export function rememberSession(port, sessionId, fields) {
   if (!sessionId) return;
-  const all = readPromptFile(port);
-  const prev = normalizeMeta(all[sessionId]);
-  all[sessionId] = {
-    prompt: fields.prompt !== undefined ? String(fields.prompt) : prev.prompt,
-    model: fields.model !== undefined ? String(fields.model) : prev.model,
-    steeredFrom: fields.steeredFrom !== undefined ? String(fields.steeredFrom) : prev.steeredFrom,
-  };
   const file = promptsFile(port);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(all)}\n`);
+  withFileLock(`${file}.lock`, () => {
+    const all = readPromptFile(port);
+    const prev = normalizeMeta(all[sessionId]);
+    all[sessionId] = {
+      prompt: fields.prompt !== undefined ? String(fields.prompt) : prev.prompt,
+      model: fields.model !== undefined ? String(fields.model) : prev.model,
+      steeredFrom: fields.steeredFrom !== undefined ? String(fields.steeredFrom) : prev.steeredFrom,
+    };
+    writeAtomic(file, `${JSON.stringify(all)}\n`);
+  });
 }
 
 export function rememberPrompt(port, sessionId, prompt) {
@@ -169,10 +172,13 @@ export async function startHub() {
       resolve();
     });
     const stop = () => {
-      if (!child.killed) child.kill();
+      signalProcessTree(child.pid);
+      const force = setTimeout(() => signalProcessTree(child.pid, { force: true }), 2000);
+      child.once('exit', () => clearTimeout(force));
     };
     process.once('SIGINT', stop);
     process.once('SIGTERM', stop);
+    if (process.platform === 'win32') process.once('SIGBREAK', stop);
   });
 }
 

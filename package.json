@@ -14,6 +14,7 @@
   "scripts": {
     "setup": "node scripts/setup.mjs",
     "smoke": "node scripts/smoke.mjs",
+    "test": "node --test test/shim.test.mjs test/state.test.mjs test/notes.test.mjs test/bridge.test.mjs test/format.test.mjs",
     "silka": "node src/silka/cli.mjs"
   },
   "repository": {

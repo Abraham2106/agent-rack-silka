@@ -3,11 +3,12 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { graphHint } from './graph.mjs';
+import { withFileLock, writeAtomic } from './lock.mjs';
 import { appendNote } from './notes.mjs';
 import { originLabel } from './origin.mjs';
 
 const TWO_HOURS = 2 * 60 * 60 * 1000;
-const HEADER = 'Estado del proyecto (silka)';
+export const HEADER = 'Estado del proyecto (silka)';
 
 export function silkaDir(workspace) {
   return path.join(path.resolve(workspace), '.silka');
@@ -21,38 +22,10 @@ function decisionsFile(workspace) {
   return path.join(silkaDir(workspace), 'decisions.jsonl');
 }
 
-function sleepMs(ms) {
-  try {
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-  } catch {
-    const end = Date.now() + ms;
-    while (Date.now() < end) { /* espera corta */ }
-  }
-}
-
 function withLock(workspace, fn) {
   const dir = silkaDir(workspace);
   fs.mkdirSync(dir, { recursive: true });
-  const lock = path.join(dir, '.lock');
-  const start = Date.now();
-  while (Date.now() - start < 4000) {
-    try {
-      const fd = fs.openSync(lock, 'wx');
-      try {
-        return fn();
-      } finally {
-        fs.closeSync(fd);
-        fs.rmSync(lock, { force: true });
-      }
-    } catch (err) {
-      if (err?.code !== 'EEXIST') throw err;
-      try {
-        if (Date.now() - fs.statSync(lock).mtimeMs > 8000) fs.rmSync(lock, { force: true });
-      } catch { /* otro proceso lo soltó */ }
-      sleepMs(25);
-    }
-  }
-  return fn();
+  return withFileLock(path.join(dir, '.lock'), fn);
 }
 
 function emptyStore() {
@@ -73,17 +46,7 @@ export function readStore(workspace) {
 }
 
 function writeStore(workspace, store) {
-  const file = tasksFile(workspace);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, `${JSON.stringify(store, null, 2)}\n`);
-  try {
-    fs.rmSync(file, { force: true });
-    fs.renameSync(tmp, file);
-  } catch {
-    fs.copyFileSync(tmp, file);
-    fs.rmSync(tmp, { force: true });
-  }
+  writeAtomic(tasksFile(workspace), `${JSON.stringify(store, null, 2)}\n`);
 }
 
 export function readDecisions(workspace) {
@@ -188,9 +151,13 @@ function overlaps(a, b) {
 }
 
 export function attributeChanges(self, peers, changed, endFiles) {
+  const already = new Set(Object.keys(self.start?.files || {}));
+  const fresh = (changed || []).filter((file) => !already.has(file));
+  const active = (peers || []).some((peer) => peer.status === 'running' && overlaps(self, peer));
+  if (active) return { files: [], ambiguous: fresh };
   const files = [];
   const ambiguous = [];
-  for (const file of changed) {
+  for (const file of fresh) {
     const hit = (peers || []).filter((peer) => {
       if (!overlaps(self, peer)) return false;
       if ((peer.files || []).includes(file) || (peer.ambiguous || []).includes(file)) return true;
@@ -208,7 +175,7 @@ export function attributeChanges(self, peers, changed, endFiles) {
 }
 
 function fileList(files, max = 3) {
-  const list = (files || []).filter(Boolean);
+  const list = (files || []).filter(Boolean).map((file) => oneLine(file, 40));
   if (!list.length) return '';
   const shown = list.slice(0, max).join(', ');
   const extra = list.length - max;
@@ -243,8 +210,14 @@ export function formatBlock(workspace, { excludeId } = {}) {
   for (const decision of decisions.slice(0, 3)) tail.push(`decisión: ${oneLine(decision.text, 72)}`);
   if (graph) tail.push(graph);
   const room = Math.max(0, 15 - lines.length - tail.length);
-  for (const task of others.slice(0, room)) {
-    const files = fileList(taskFiles(task)) || 'archivos';
+  const limit = lines.length + room;
+  const seen = new Set();
+  for (const task of others) {
+    if (lines.length >= limit) break;
+    const files = fileList(taskFiles(task)) || 'sin cambios';
+    const key = `${task.agent} ${files}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
     const summary = oneLine(task.summary, 48);
     lines.push(`otros: ${task.agent} ${files}${summary ? ` — ${summary}` : ''}`);
   }
@@ -277,9 +250,8 @@ export function beginTurn({ workspace, agent, from, prompt }) {
     writeStore(dir, store);
   });
   const block = formatBlock(dir, { excludeId: id });
-  const body = String(prompt ?? '');
-  const promptWithState = body.startsWith(HEADER) ? body : `${block}\n\n${body}`;
-  return { id, block, prompt: promptWithState };
+  const body = String(prompt ?? '').replaceAll(HEADER, 'Estado del proyecto (texto)');
+  return { id, block, prompt: `${block}\n\n${body}` };
 }
 
 function conflictKey(file, taskIds) {

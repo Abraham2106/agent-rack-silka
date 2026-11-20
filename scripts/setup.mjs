@@ -17,8 +17,6 @@
 // no pases por flag.
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { connectHarness } from '../src/silka/connect.mjs';
-import { graphStatus } from '../src/silka/graph.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -76,6 +74,10 @@ if (!fs.existsSync(SERVER)) {
   if (r.status !== 0 || !fs.existsSync(SERVER)) { console.error(red('npm install falló.')); process.exit(1); }
 }
 ok('agent-rack instalado');
+
+// connect.mjs → hub.mjs → agent-rack. Tiene que ir después del npm install.
+const { connectHarness } = await import('../src/silka/connect.mjs');
+const { graphStatus } = await import('../src/silka/graph.mjs');
 
 // ---- 2. detectar agentes ----------------------------------------------------
 function version(cmd) {

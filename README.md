@@ -140,7 +140,7 @@ En `ui`, `e` abre la vista Estado del workspace de la sesión elegida: rama, HEA
 
 Cada turno que pasa por el shim anota en `<workspace>/.silka/` qué agente trabajó, desde qué commit y qué archivos tocó. `tasks.json` guarda la sesión, el origen, la rama, el commit base, el inicio, el fin, el estado y un resumen de una línea. Los archivos salen de comparar `git status --porcelain` y el hash de cada uno al empezar y al terminar. Si otro agente estaba en el mismo árbol, el archivo queda marcado como ambiguo. `decisions.jsonl` guarda decisiones con autor, fecha, sesión y texto.
 
-Al empezar el turno, el shim antepone como máximo 15 líneas, "Estado del proyecto (silka)": rama y HEAD, lo que cambiaron otros agentes en las últimas 2 horas, las tareas en curso y las últimas 3 decisiones. Sin repo git, el bloque es mínimo. No vuelca archivos.
+Al empezar el turno, el shim antepone siempre como máximo 15 líneas, "Estado del proyecto (silka)": rama y HEAD, lo que cambiaron otros agentes en las últimas 2 horas, las tareas en curso y las últimas 3 decisiones. Si el prompt trae ese encabezado, se escapa y no sustituye al bloque real. Una tarea sin archivos dice "sin cambios". Sin repo git, el bloque es mínimo. No vuelca archivos.
 
 Esas mismas líneas están en el bridge:
 
@@ -171,10 +171,10 @@ npm run silka -- connect claude --with-graph
 - [`shims/agent-shim.mjs`](shims/agent-shim.mjs) es el puente:
   - **Codex**: `codex exec --json`. El shim deja en stdout el hilo y el mensaje final, y manda el resto a stderr como pasos (`→ mcp agent-rack.opencode_run`, `→ $ cmd`), para que el resumen no arrastre el JSON.
   - **OpenCode**: `opencode run --format json`, leído línea por línea y traducido al formato JSON de Claude Code. Le indica el directorio de trabajo, porque OpenCode resuelve rutas relativas contra la raíz del repo git.
-  - **Cursor**: `cursor-agent -p --output-format stream-json --stream-partial-output --trust`, leído línea por línea. `mode=plan` se traduce a `--mode plan` (solo lectura) y la escritura a `--force`.
+  - **Cursor**: `cursor-agent -p --output-format stream-json --stream-partial-output --trust`, leído línea por línea. `--permission-mode plan` se traduce a `--mode plan`. `--force` solo si la política es `danger-full-access`.
   - **Actividad en vivo**: cada paso de Cursor y OpenCode sale al momento por stderr (`→ read src/x.ts`, `→ $ npm test`, `✎ texto`). stdout queda en la línea final `{"type":"result",...}`, así el resumen del manager sigue corto.
   - En Windows lee el `.cmd` de npm en el PATH para encontrar el `.exe` o `.js` real. Así el prompt llega intacto (saltos de línea, comillas, `&`, `%`) y sigue funcionando aunque el CLI se actualice y cambie de ruta.
-  - La salida cruda de la última corrida queda en `shims/logs/last-<agente>.log` para depurar.
+  - La salida cruda de la última corrida queda en `~/.config/silka/logs/last-<agente>.log` (y la anterior en `.1`), con tokens redactados. No se escribe dentro del repo.
 - `agent-rack.config.json` lo genera el setup con rutas absolutas locales (está en `.gitignore`). Hay un ejemplo en [`agent-rack.config.example.json`](agent-rack.config.example.json).
 - `.npmrc` trae `ignore-scripts=true` porque el postinstall de agent-rack es solo para Unix. `node-pty` ya incluye binarios precompilados.
 
@@ -186,13 +186,22 @@ npm run silka -- connect claude --with-graph
 | OpenCode: `API key has expired` o `requires more credits` | `opencode auth login`, o usa otro modelo con `--opencode-model`. |
 | OpenCode: `OpenCode X or newer is required to use the free tier` | `npm i -g opencode-ai@latest` |
 | Cursor: `Authentication required` | `cursor-agent login` |
-| La tarea se queda colgada (modelo con rate limit) | Baja `timeoutSeconds` o cambia de modelo. Revisa `shims/logs/`. |
+| La tarea se queda colgada (modelo con rate limit) | Baja `timeoutSeconds` o cambia de modelo. Revisa `~/.config/silka/logs/`. |
 | `workspace ... not allowed` | Agrega la carpeta con `npm run setup -- --workspace <dir>`. |
 
 ## Seguridad
 
 - Por defecto la política es `workspace-write`. Codex la aplica con su sandbox. Cursor y OpenCode no tienen sandbox de archivos, así que ahí se aplica por instrucciones.
-- Los agentes solo pueden trabajar dentro de `allowedWorkspaces`.
+
+### Qué implica cada política para Cursor
+
+| Política | Cursor |
+|---|---|
+| `read-only` | `--mode plan`. No escribe. Sin `--force`. |
+| `workspace-write` | Sin `--force`: el CLI pide confirmación para el shell. `--trust` solo marca el workspace ya validado. |
+| `danger-full-access` | Añade `--force` (aprueba solo). Si el turno pide `--permission-mode plan`, gana `--mode plan` y no se usa `--force`. |
+
+- Los agentes solo pueden trabajar dentro de `allowedWorkspaces`. El bridge rechaza un workspace con `..` o fuera de esa lista.
 - agent-rack quita del entorno las variables que parecen secretos antes de lanzar cada agente. Cada CLI usa su propio login.
 
 ## Licencia

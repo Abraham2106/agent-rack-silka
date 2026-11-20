@@ -26,54 +26,58 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readSilkaMark } from '../src/silka/mark.mjs';
+import { silkaConfigDir } from '../src/silka/paths.mjs';
+import { signalProcessTree } from '../src/silka/proc.mjs';
 import { beginTurn, finishTurn, oneLine } from '../src/silka/state.mjs';
 
+export { readSilkaMark };
+
 const IS_WIN = process.platform === 'win32';
-const [target, ...rest] = process.argv.slice(2);
+const RESULT_LIMIT = 2000;
+const RESULT_NOTE = '…(recortado; ver silka logs)';
 
 // ---- parseo de args estilo Claude Code --------------------------------------
 const VALUE_FLAGS = new Set(['--model', '--resume', '--permission-mode', '--output-format']);
-const opts = {};
-const positionals = [];
-for (let i = 0; i < rest.length; i++) {
-  const a = rest[i];
-  if (VALUE_FLAGS.has(a)) { opts[a.slice(2)] = rest[++i]; continue; }
-  const eq = a.match(/^--(model|resume|permission-mode|output-format)=(.*)$/s);
-  if (eq) { opts[eq[1]] = eq[2]; continue; }
-  positionals.push(a);
-}
-const prompt = positionals.at(-1) ?? '';
-const readOnly = opts['permission-mode'] === 'plan';
 
-const SILKA_MARK = /^\[silka depth=(\d+) from=([^\]]*)\]\s*/;
-
-/** La marca la pone el bridge porque el hub no hereda el entorno de quien llama. */
-export function readSilkaMark(text) {
-  const raw = String(text ?? '');
-  const match = raw.match(SILKA_MARK);
-  if (!match) return { prompt: raw, depth: null, from: null };
-  return { prompt: raw.slice(match[0].length), depth: Number(match[1]), from: match[2] };
+export function parseShimArgs(argv) {
+  const opts = {};
+  const positionals = [];
+  const list = argv || [];
+  for (let i = 0; i < list.length; i++) {
+    const a = list[i];
+    if (VALUE_FLAGS.has(a)) { opts[a.slice(2)] = list[++i]; continue; }
+    const eq = a.match(/^--(model|resume|permission-mode|output-format)=(.*)$/s);
+    if (eq) { opts[eq[1]] = eq[2]; continue; }
+    positionals.push(a);
+  }
+  return { opts, positionals, prompt: positionals.at(-1) ?? '' };
 }
+
+let opts = {};
+let prompt = '';
+let target = '';
 
 function silkaChildEnv(agent, rawPrompt) {
   const mark = readSilkaMark(rawPrompt);
-  const base = mark.depth ?? Number(process.env.SILKA_DEPTH || 0);
+  const base = mark.depth == null ? Number(process.env.SILKA_DEPTH || 0) : mark.depth;
   const depth = Number.isFinite(base) ? base + 1 : 1;
   return { SILKA_DEPTH: String(depth), SILKA_AGENT: agent };
 }
 
 function attachTurn(agent, rawPrompt) {
   const mark = readSilkaMark(rawPrompt);
+  const trusted = mark.depth != null;
   try {
     const turn = beginTurn({
       workspace: process.cwd(),
       agent,
-      from: mark.from || process.env.SILKA_AGENT || 'tú',
+      from: trusted ? (mark.from || 'tú') : (process.env.SILKA_AGENT || 'tú'),
       prompt: mark.prompt,
     });
     return { prompt: turn.prompt, turnId: turn.id };
-  } catch {
-    return { prompt: mark.prompt, turnId: null };
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
   }
 }
 
@@ -387,9 +391,9 @@ export function onOpencodeEvent(ev, state) {
     return rememberCall(state, id, line);
   }
   if (ev.type === 'error') {
-    const msg = ev.error?.data?.message || ev.error?.name || (typeof ev.error === 'string' ? ev.error : 'error');
-    state.errors.push(String(msg));
-    return [`✗ ${clipStep(msg, 72)}`];
+    const msg = opencodeErrorText(ev);
+    state.errors.push(msg);
+    return [`✗ ${clipStep(clarifyErrorText('opencode', state.model, msg), 120)}`];
   }
   return [];
 }
@@ -399,7 +403,7 @@ function scanCursorResult(stdout) {
   for (const line of lines) {
     try {
       const parsed = JSON.parse(line);
-      if (parsed && typeof parsed === 'object' && (parsed.type === 'result' || 'result' in parsed) && typeof parsed.result === 'string') {
+      if (parsed && parsed.type === 'result' && typeof parsed.result === 'string') {
         return parsed.result;
       }
     } catch { /* línea no JSON */ }
@@ -407,24 +411,65 @@ function scanCursorResult(stdout) {
   return '';
 }
 
-export function finishCursor(state, stdout, err) {
-  const result = typeof state.result === 'string' ? state.result : scanCursorResult(stdout);
-  let text = result || String(stdout || '').trim().slice(-2000) || 'Cursor no devolvió JSON.';
-  if ((!result || state.is_error) && String(err || '').trim()) {
-    text += `\n\nstderr:\n${String(err).trim().slice(-1500)}`;
+function opencodeErrorText(ev) {
+  const err = ev?.error;
+  const found = [];
+  const push = (value) => {
+    if (typeof value === 'string' && value.trim()) found.push(value.trim());
+  };
+  if (typeof err === 'string') push(err);
+  if (err && typeof err === 'object') {
+    push(err.data?.message);
+    push(err.message);
+    if (typeof err.data === 'string') push(err.data);
+    if (typeof err.name === 'string' && !/^error$/i.test(err.name)) push(err.name);
   }
+  push(ev?.message);
+  push(ev?.data?.message);
+  return found.find((item) => !/^error$/i.test(item)) || found[0] || 'error';
+}
+
+/** Un "error" pelado con modelo pedido se dice claro. No se pega el stream. */
+export function clarifyErrorText(agent, model, text) {
+  const raw = String(text ?? '').replace(/\s+/g, ' ').trim();
+  const vague = !raw || /^error\.?$/i.test(raw);
+  const missing = /not found|does not exist|unknown model|invalid model|no such model|is not valid|isn't valid|not supported|not available|no existe/i.test(raw);
+  if (model && (vague || missing)) return `modelo '${model}' no existe para ${agent}`;
+  return raw || `error de ${agent}`;
+}
+
+export function capResult(text) {
+  const clean = String(text ?? '').trim();
+  if (clean.length <= RESULT_LIMIT) return clean;
+  return `${clean.slice(0, RESULT_LIMIT - RESULT_NOTE.length)}${RESULT_NOTE}`;
+}
+
+export function finishCursor(state, stdout, err, model = '') {
+  const result = typeof state.result === 'string' ? state.result : scanCursorResult(stdout);
+  if (!result) {
+    const last = String(err || '').split(/\n/).map((line) => line.trim()).filter(Boolean).at(-1) || '';
+    return {
+      is_error: true,
+      result: capResult(clarifyErrorText('cursor', model, last || 'Cursor no devolvió JSON.')),
+      session_id: state.session_id,
+    };
+  }
+  const text = state.is_error ? clarifyErrorText('cursor', model, result) : result;
   return {
-    is_error: Boolean(state.is_error) || !result,
-    result: text,
+    is_error: Boolean(state.is_error),
+    result: capResult(text),
     session_id: state.session_id,
   };
 }
 
-export function finishOpencode(state) {
-  const result = state.errors.length ? state.errors.join('\n') : (state.texts.at(-1) ?? '').trim();
+export function finishOpencode(state, model = '') {
+  const raw = state.errors.length ? state.errors.at(-1) : (state.texts.at(-1) ?? '').trim();
+  const text = state.errors.length
+    ? clarifyErrorText('opencode', model, raw)
+    : (raw || 'OpenCode no devolvió texto.');
   return {
-    is_error: state.errors.length > 0 || !result,
-    result: result || 'OpenCode no devolvió texto.',
+    is_error: state.errors.length > 0 || !raw,
+    result: capResult(text),
     session_id: state.session_id,
   };
 }
@@ -437,7 +482,7 @@ function opencodeSpec() {
   const model = opts.model || process.env.OPENCODE_DEFAULT_MODEL;
   if (model) args.push('-m', model);
   if (opts.resume) args.push('-s', opts.resume);
-  if (readOnly) args.push('--agent', 'plan');
+  if (opts['permission-mode'] === 'plan') args.push('--agent', 'plan');
   const turned = attachTurn('opencode', prompt);
   // OpenCode resuelve rutas relativas contra la raíz del repo git, no contra el cwd.
   const text = `[Directorio de trabajo: ${process.cwd()} (las rutas relativas son relativas a este directorio)]\n\n${turned.prompt}`;
@@ -449,7 +494,28 @@ function opencodeSpec() {
     env: silkaChildEnv('opencode', prompt),
     turnId: turned.turnId,
     promptText: text,
+    model: opts.model || '',
   };
+}
+
+export function cursorLaunchArgs({ model, resume, permissionMode, policy = 'workspace-write' } = {}) {
+  const args = ['-p', '--output-format', 'stream-json', '--stream-partial-output', '--trust'];
+  if (model) args.push('--model', model);
+  if (resume) args.push('--resume', resume);
+  const plan = permissionMode === 'plan' || policy === 'read-only';
+  if (plan) args.push('--mode', 'plan');
+  else if (policy === 'danger-full-access') args.push('--force');
+  return args;
+}
+
+function executionPolicy() {
+  try {
+    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+    const config = JSON.parse(fs.readFileSync(path.join(root, 'agent-rack.config.json'), 'utf8'));
+    return config.security?.executionPolicy || 'workspace-write';
+  } catch {
+    return 'workspace-write';
+  }
 }
 
 function cursorSpec() {
@@ -457,11 +523,13 @@ function cursorSpec() {
   if (!l) fail('No encontré cursor-agent (instálalo con https://cursor.com/cli o define CURSOR_AGENT_BIN).');
   // stream-json emite cada herramienta al usarla. --stream-partial-output manda
   // el texto en deltas, así el ✎ aparece mientras el modelo escribe.
-  const args = ['-p', '--output-format', 'stream-json', '--stream-partial-output', '--trust'];
-  if (opts.model) args.push('--model', opts.model);
-  if (opts.resume) args.push('--resume', opts.resume);
-  if (readOnly) args.push('--mode', 'plan');
-  else args.push('--force'); // con -p y sin --force los comandos de shell quedan bloqueados
+  // --force solo con danger-full-access. plan sigue siendo --mode plan.
+  const args = cursorLaunchArgs({
+    model: opts.model,
+    resume: opts.resume,
+    permissionMode: opts['permission-mode'],
+    policy: executionPolicy(),
+  });
   const turned = attachTurn('cursor', prompt);
   args.push(turned.prompt);
   return {
@@ -471,6 +539,7 @@ function cursorSpec() {
     env: { CURSOR_INVOKED_AS: 'cursor-agent', ...silkaChildEnv('cursor', prompt) },
     turnId: turned.turnId,
     promptText: turned.prompt,
+    model: opts.model || '',
   };
 }
 
@@ -495,7 +564,7 @@ function runCodex(argv) {
   let err = '';
   let buf = '';
   const take = (line) => {
-    const trimmed = line.replace(/\r$/, '');
+    let trimmed = line.replace(/\r$/, '');
     if (!trimmed.trim()) return;
     let data;
     try { data = JSON.parse(trimmed); } catch {
@@ -503,6 +572,15 @@ function runCodex(argv) {
       if (step) process.stderr.write(`${step}\n`);
       err += `${step}\n`;
       return;
+    }
+    if (String(data.type || '') === 'error') {
+      const model = modelFromArgs(args);
+      const current = typeof data.message === 'string' ? data.message : '';
+      const next = clarifyErrorText('codex', model, current || 'error');
+      if (model && next !== current) {
+        data = { ...data, message: next };
+        trimmed = JSON.stringify(data);
+      }
     }
     const kind = classifyCodexEvent(data);
     if (kind.final) {
@@ -536,11 +614,14 @@ function runCodex(argv) {
   child.stderr.on('data', (chunk) => {
     const text = chunk.toString('utf8');
     err += text;
-    process.stderr.write(text);
+    for (const line of text.split(/\n/)) {
+      const step = clipStep(redactSecrets(line), 120);
+      if (step) process.stderr.write(`${step}\n`);
+    }
   });
-  for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => child.kill());
+  listenStop(child);
   child.on('error', (e) => { process.stderr.write(`No pude iniciar codex: ${e.message}\n`); process.exit(127); });
-  child.on('close', (code) => {
+  whenAgentExits(child, (code) => {
     if (buf.trim()) take(buf);
     if (held.final) {
       process.stdout.write(`${held.final}\n`);
@@ -548,19 +629,80 @@ function runCodex(argv) {
     }
     const status = code ? 'failed' : 'done';
     closeTurn(turned.turnId, status, held.text);
-    writeLog({ cmd: l.cmd, args, promptText: turned.prompt }, code, out, err);
+    writeLog({ cmd: l.cmd, args, promptText: turned.prompt, kind: 'codex' }, code, out, err);
     process.exit(code ?? 1);
   });
+}
+
+export function redactSecrets(text) {
+  return String(text ?? '')
+    .replace(/nonce=[a-f0-9]{16,}/g, 'nonce=[redactado]')
+    .replace(/\bsk-[A-Za-z0-9_\-]{8,}/g, '[redactado]')
+    .replace(/\b(Bearer\s+)\S+/gi, '$1[redactado]')
+    .replace(/\b(token|api[_-]?key|secret|password)(["']?\s*[:=]\s*["']?)[^\s"',}]+/gi, '$1$2[redactado]')
+    .replace(/\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{5,}/g, '[redactado]');
+}
+
+function clipLog(text, max = 700_000) {
+  const raw = String(text ?? '');
+  if (raw.length <= max) return raw;
+  return `…(log rotado, ${raw.length} caracteres)\n${raw.slice(-max)}`;
 }
 
 function writeLog(spec, code, out, err) {
   if (process.env.AGENT_SHIM_NO_LOG) return;
   try {
-    const logDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'logs');
+    const logDir = path.join(silkaConfigDir(), 'logs');
     fs.mkdirSync(logDir, { recursive: true });
-    fs.writeFileSync(path.join(logDir, `last-${target}.log`),
-      `cwd=${process.cwd()}\ncmd=${spec.cmd} ${spec.args.slice(0, -1).join(' ')} <prompt>\nexit=${code}\n--- prompt\n${String(spec.promptText || '').slice(0, 8000)}\n--- stdout\n${out}\n--- stderr\n${err}`);
+    const name = spec.kind || target || 'agent';
+    const file = path.join(logDir, `last-${name}.log`);
+    const prev = `${file}.1`;
+    if (fs.existsSync(file)) {
+      try {
+        fs.rmSync(prev, { force: true });
+        fs.renameSync(file, prev);
+      } catch { /* se sobreescribe igual */ }
+    }
+    const body = redactSecrets([
+      `cwd=${process.cwd()}`,
+      `cmd=${spec.cmd} ${(spec.args || []).slice(0, -1).join(' ')} <prompt>`,
+      `exit=${code}`,
+      '--- prompt',
+      String(spec.promptText || '').slice(0, 8000),
+      '--- stdout',
+      clipLog(out),
+      '--- stderr',
+      clipLog(err),
+      '',
+    ].join('\n'));
+    fs.writeFileSync(file, body);
   } catch { /* el log es opcional */ }
+}
+
+function listenStop(child) {
+  const stop = () => {
+    signalProcessTree(child.pid);
+    const force = setTimeout(() => signalProcessTree(child.pid, { force: true }), 2000);
+    force.unref?.();
+  };
+  process.on('SIGINT', stop);
+  process.on('SIGTERM', stop);
+  if (IS_WIN) process.on('SIGBREAK', stop);
+}
+
+/** El fin es `exit` más un margen corto. `close` puede no llegar si un hijo deja el stdout abierto. */
+function whenAgentExits(child, after) {
+  let armed = false;
+  const arm = (code) => {
+    if (armed) return;
+    armed = true;
+    setTimeout(() => {
+      signalProcessTree(child.pid, { force: true });
+      setTimeout(() => after(code ?? 1), 50);
+    }, 400);
+  };
+  child.on('exit', (code) => arm(code));
+  child.on('close', (code) => arm(code));
 }
 
 function publish(state, lines) {
@@ -579,6 +721,7 @@ function runTranslated(spec) {
     windowsHide: true,
   });
   const state = freshState();
+  state.model = spec.model || '';
   let out = '';
   let err = '';
   let buf = '';
@@ -610,15 +753,17 @@ function runTranslated(spec) {
   });
   // El stderr del CLI no se reenvía: el nuestro es solo la actividad corta.
   child.stderr.on('data', (chunk) => { err += chunk.toString('utf8'); });
-  for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => child.kill());
+  listenStop(child);
   child.on('error', (e) => fail(`No pude iniciar ${target}: ${e.message}`));
-  child.on('close', (code) => {
+  whenAgentExits(child, (code) => {
     clearTimeout(pause);
     if (buf.trim()) feed(buf);
     clearTimeout(pause);
     publish(state, flushText(state));
     writeLog(spec, code, out, err);
-    const result = spec.kind === 'cursor' ? finishCursor(state, out, err) : finishOpencode(state);
+    const result = spec.kind === 'cursor'
+      ? finishCursor(state, out, err, spec.model)
+      : finishOpencode(state, spec.model);
     closeTurn(spec.turnId, result.is_error ? 'failed' : 'done', result.result);
     emit(result, result.is_error ? (code || 1) : 0);
   });
@@ -631,7 +776,21 @@ function isDirectRun() {
 }
 
 // ---- main -------------------------------------------------------------------
+function modelFromArgs(args) {
+  for (let i = 0; i < args.length; i++) {
+    if ((args[i] === '--model' || args[i] === '-m') && args[i + 1] && !String(args[i + 1]).startsWith('-')) return args[i + 1];
+    const eq = String(args[i] || '').match(/^--model=(.*)$/);
+    if (eq?.[1]) return eq[1];
+  }
+  return '';
+}
+
 if (isDirectRun()) {
+  const [name, ...rest] = process.argv.slice(2);
+  target = name;
+  const parsed = parseShimArgs(rest);
+  opts = parsed.opts;
+  prompt = parsed.prompt;
   if (target === 'codex') {
     runCodex(rest);
   } else if (target === 'resume' && rest[0] === 'codex') {

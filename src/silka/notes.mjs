@@ -1,10 +1,15 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { withFileLock, writeAtomic } from './lock.mjs';
+import { silkaConfigDir } from './paths.mjs';
 
 export function notesFile() {
-  return path.join(os.homedir(), '.config', 'silka', 'notes.jsonl');
+  return path.join(silkaConfigDir(), 'notes.jsonl');
+}
+
+function notesLock() {
+  return path.join(silkaConfigDir(), 'notes.lock');
 }
 
 function readNotes() {
@@ -23,10 +28,8 @@ function readNotes() {
 }
 
 function writeNotes(notes) {
-  const file = notesFile();
-  fs.mkdirSync(path.dirname(file), { recursive: true });
   const body = notes.map((note) => JSON.stringify(note)).join('\n');
-  fs.writeFileSync(file, body ? `${body}\n` : '');
+  writeAtomic(notesFile(), body ? `${body}\n` : '');
 }
 
 export function appendNote({ sessionId, text }) {
@@ -37,10 +40,12 @@ export function appendNote({ sessionId, text }) {
     at: new Date().toISOString(),
     read: false,
   };
-  const file = notesFile();
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.appendFileSync(file, `${JSON.stringify(note)}\n`);
-  return note;
+  return withFileLock(notesLock(), () => {
+    const notes = readNotes();
+    notes.push(note);
+    writeNotes(notes);
+    return note;
+  });
 }
 
 function matchesSession(note, sessionId) {
@@ -51,13 +56,15 @@ function matchesSession(note, sessionId) {
 
 /** Notas con read:false. Con markRead las marca y las reescribe. */
 export function unreadNotes({ sessionId, markRead = true } = {}) {
-  const notes = readNotes();
-  const pending = notes.filter((note) => note.read === false && matchesSession(note, sessionId));
-  if (markRead && pending.length) {
-    const ids = new Set(pending.map((note) => note.id));
-    writeNotes(notes.map((note) => (ids.has(note.id) ? { ...note, read: true } : note)));
-  }
-  return pending;
+  return withFileLock(notesLock(), () => {
+    const notes = readNotes();
+    const pending = notes.filter((note) => note.read === false && matchesSession(note, sessionId));
+    if (markRead && pending.length) {
+      const ids = new Set(pending.map((note) => note.id));
+      writeNotes(notes.map((note) => (ids.has(note.id) ? { ...note, read: true } : note)));
+    }
+    return pending;
+  });
 }
 
 export function unreadSessionIds() {

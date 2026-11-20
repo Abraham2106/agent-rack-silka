@@ -4,13 +4,15 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { sseTransportInit } from 'agent-rack/dist/security/auth.js';
+import { validateWorkspacePath } from 'agent-rack/dist/security/workspace.js';
 import { isBusy } from './format.mjs';
-import { ensureHub } from './hub.mjs';
+import { ensureHub, loadSilkaConfig } from './hub.mjs';
+import { stampPrompt } from './mark.mjs';
 import { unreadNotes } from './notes.mjs';
 import { originLabel, readOrigins, rememberOrigin } from './origin.mjs';
 import { appendDecision, formatBlock, formatChanges, formatDecisions, samePath } from './state.mjs';
 
-const SILKA_MARK = /^\[silka depth=\d+ from=[^\]]*\]\s*/;
+const READ_ONLY_AT_MAX = new Set(['silka_state', 'silka_changes', 'silka_decisions']);
 
 const NOTES_TOOL = {
   name: 'silka_notes',
@@ -123,22 +125,49 @@ export function isDelegatingTool(name) {
     || /_run$/.test(name);
 }
 
+export function isManager(from) {
+  const label = originLabel(from);
+  return label === 'tú' || label === 'claude';
+}
+
+/** A profundidad máxima solo quedan las lecturas de Silka. Las notas, solo el manager. */
+export function visibleToolNames(names, { depth = 0, max = maxDepth(), manager = true } = {}) {
+  return (names || []).filter((name) => {
+    if (depth >= max) return READ_ONLY_AT_MAX.has(name);
+    if (name === 'silka_notes' && !manager) return false;
+    return true;
+  });
+}
+
+export function createsSession(name) {
+  return isDelegatingTool(name);
+}
+
+/** Rechaza `..` y cualquier ruta fuera de allowedWorkspaces, ya en forma canónica. */
+export function assertWorkspace(workspace, allowedWorkspaces) {
+  const raw = String(workspace ?? '').trim();
+  if (!raw) throw new Error('Falta workspace.');
+  if (raw.split(/[\\/]+/).includes('..')) {
+    throw new Error(`Workspace rechazado: '${raw}' contiene '..'.`);
+  }
+  try {
+    return validateWorkspacePath(raw, allowedWorkspaces || []).canonicalPath;
+  } catch (err) {
+    throw new Error(err instanceof Error ? err.message : String(err));
+  }
+}
+
 export function depthBlockMessage(depth = currentDepth()) {
   const max = maxDepth();
   return `No se puede delegar: SILKA_DEPTH=${depth} ya alcanzó el máximo (${max}). Un sub-agente no lanza otro.`;
 }
 
 export function callerFrom(clientInfo) {
-  const name = String(clientInfo?.name ?? '').trim();
-  if (name) return name.replace(/[\[\]]/g, '');
-  const agent = String(process.env.SILKA_AGENT ?? '').trim();
-  if (agent) return agent.replace(/[\[\]]/g, '');
+  const name = String(clientInfo?.name ?? '').replace(/[\u0000-\u001f]/g, '').replace(/[\[\]]/g, '').trim();
+  if (name) return originLabel(name);
+  const agent = String(process.env.SILKA_AGENT ?? '').replace(/[\u0000-\u001f]/g, '').trim();
+  if (agent) return originLabel(agent);
   return 'tú';
-}
-
-export function stampPrompt(prompt, depth, from) {
-  const clean = String(prompt ?? '').replace(SILKA_MARK, '');
-  return `[silka depth=${depth} from=${from}] ${clean}`;
 }
 
 function stampArgs(name, args, depth, from) {
@@ -190,8 +219,13 @@ async function hubSessions(hub) {
 }
 
 function localTool(name, args, from, sessions) {
-  const workspace = workspaceOf(args);
-  if (!workspace) return textResult('Falta workspace.', true);
+  if (!name.startsWith('silka_') || name === 'silka_notes') return null;
+  let workspace;
+  try {
+    workspace = assertWorkspace(workspaceOf(args), loadSilkaConfig().config.allowedWorkspaces || []);
+  } catch (err) {
+    return textResult(err instanceof Error ? err.message : String(err), true);
+  }
   if (name === 'silka_state') return textResult(formatBlock(workspace));
   if (name === 'silka_changes') {
     try { return textResult(formatChanges(workspace, args.since)); }
@@ -230,10 +264,14 @@ export async function startBridge() {
 
   const server = new Server({ name: 'agent-rack', version: '0.1.0' }, { capabilities: { tools: {} } });
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    const blocked = currentDepth() >= maxDepth();
+    const manager = isManager(callerFrom(server.getClientVersion()));
+    const allowed = new Set(visibleToolNames(tools.map((tool) => tool.name), {
+      depth: currentDepth(),
+      manager,
+    }));
     return {
       tools: tools
-        .filter((tool) => !blocked || !isDelegatingTool(tool.name))
+        .filter((tool) => allowed.has(tool.name))
         .map((tool) => ({
           name: tool.name,
           description: tool.description,
@@ -244,11 +282,17 @@ export async function startBridge() {
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const name = request.params.name;
     const args = request.params.arguments || {};
+    const from = callerFrom(server.getClientVersion());
+    const manager = isManager(from);
+    if (!visibleToolNames([name], { depth: currentDepth(), manager }).includes(name)) {
+      return { content: [{ type: 'text', text: depthBlockMessage() }], isError: true };
+    }
     if (name === 'silka_notes') {
-      const notes = unreadNotes({ sessionId: args.sessionId, markRead: args.markRead !== false });
+      if (!manager) return { content: [{ type: 'text', text: 'silka_notes es solo para el manager.' }], isError: true };
+      const markRead = args.markRead !== false;
+      const notes = unreadNotes({ sessionId: args.sessionId, markRead });
       return { content: [{ type: 'text', text: JSON.stringify(notes) }] };
     }
-    const from = callerFrom(server.getClientVersion());
     let sessions = [];
     let listed = false;
     if (name.startsWith('silka_') || isDelegatingTool(name)) {
@@ -272,6 +316,13 @@ export async function startBridge() {
     const known = tools.some((tool) => tool.name === name);
     if (!known) {
       return { content: [{ type: 'text', text: `Herramienta desconocida: ${name}` }], isError: true };
+    }
+    if (createsSession(name) || name.startsWith('silka_')) {
+      try {
+        assertWorkspace(workspaceOf(args), loadSilkaConfig().config.allowedWorkspaces || []);
+      } catch (err) {
+        return { content: [{ type: 'text', text: err instanceof Error ? err.message : String(err) }], isError: true };
+      }
     }
     const stamped = stampArgs(name, args, lineage.depth, from);
     const before = new Set(sessions.map((session) => session.sessionId));

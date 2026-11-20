@@ -379,6 +379,7 @@ export function App({ client, port, agents, models = {} }) {
     if (banner) setBanner(null);
     const list = orderRef.current.length ? orderRef.current : sessionsRef.current.map((session) => ({ session, depth: 0 }));
     if (key.upArrow || key.downArrow) {
+      if (draftRef.current.trim()) return;
       if (!list.length) return;
       let index = list.findIndex((item) => item.session.sessionId === selectedIdRef.current);
       if (index < 0) index = 0;
