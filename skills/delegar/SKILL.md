@@ -8,6 +8,10 @@ description: Delegar trabajo de código a Codex, OpenCode o Cursor a través del
 Tú eres quien decide y revisa. Los otros agentes ejecutan. Delegar cuesta solo un tool call
 y te devuelve la respuesta final del agente, sin el transcript.
 
+El MCP `agent-rack` es el puente de silka (`silka bridge`): la sesión queda en el hub y se ve en
+`silka ui` con tu origen. Si una herramienta responde que `SILKA_DEPTH` llegó al máximo, no
+insistas: ese agente ya está anidado y no puede lanzar otro.
+
 ## Cuándo delegar
 - Tareas de implementación claras: un endpoint, un componente, un refactor, tests, un fix con causa conocida.
 - Trabajo paralelo e independiente: lanza varias sesiones a la vez (máximo 5).

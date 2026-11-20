@@ -4,7 +4,8 @@ export function shortId(sessionId) {
 
 export function pad(value, width) {
   const text = String(value ?? '');
-  return text.length >= width ? text.slice(0, width) : text.padEnd(width);
+  // Siempre deja al menos un espacio entre columnas.
+  return text.length >= width ? `${text.slice(0, width - 2)}… ` : text.padEnd(width);
 }
 
 export function promptPreview(text) {
@@ -122,6 +123,47 @@ export function activityFromEvent(event) {
   return [];
 }
 
+function continuesCut(prev, next) {
+  const size = prev.length;
+  if (size < 64 || size > 73) return false;
+  if (/[.!?…\s]$/.test(prev)) return false;
+  return /[\p{L}\p{N}]$/u.test(prev) && /^[\p{L}\p{N}]/u.test(next);
+}
+
+/** Une fragmentos ✎ cortados a media palabra hasta el fin de esa ráfaga. */
+export function groupActivity(lines) {
+  const out = [];
+  let buf = '';
+  let last = '';
+  let open = false;
+  const flush = () => {
+    const text = buf.replace(/\s+/g, ' ').trim();
+    buf = '';
+    last = '';
+    open = false;
+    if (text) out.push(`✎ ${text}`);
+  };
+  for (const line of lines) {
+    if (!line.startsWith('✎ ')) {
+      flush();
+      if (line && line !== out.at(-1)) out.push(line);
+      continue;
+    }
+    const part = line.slice(2).trim();
+    if (!part) continue;
+    if (!buf) buf = part;
+    else if (open) buf += (continuesCut(last, part) ? '' : ' ') + part;
+    else {
+      flush();
+      buf = part;
+    }
+    last = part;
+    open = part.length >= 64 && part.length <= 73 && !/[.!?…]$/.test(part);
+  }
+  flush();
+  return out;
+}
+
 export function activityFromEvents(events) {
   const lines = [];
   for (const event of events || []) {
@@ -129,7 +171,72 @@ export function activityFromEvents(events) {
       if (line && line !== lines.at(-1)) lines.push(line);
     }
   }
-  return lines;
+  return groupActivity(lines);
+}
+
+function sameAgent(agentId, from) {
+  const agent = String(agentId || '').toLowerCase();
+  const source = String(from || '').toLowerCase();
+  if (!agent || !source || source === 'tú') return false;
+  return agent === source || source.includes(agent) || agent.includes(source);
+}
+
+export function originLabel(origin) {
+  const from = origin?.from;
+  return from ? String(from) : 'tú';
+}
+
+/** Aplana las sesiones con las hijas debajo de su padre, cuando el origen o el steer lo permiten. */
+export function nestSessions(sessions, origins = {}, meta = {}) {
+  const list = Array.isArray(sessions) ? sessions : [];
+  const byId = new Map(list.map((session) => [session.sessionId, session]));
+  const parentOf = new Map();
+  for (const session of list) {
+    const steered = meta[session.sessionId]?.steeredFrom;
+    if (steered && byId.has(steered) && steered !== session.sessionId) {
+      parentOf.set(session.sessionId, steered);
+      continue;
+    }
+    const origin = origins[session.sessionId];
+    const depth = Number(origin?.depth);
+    if (!origin || !Number.isFinite(depth) || depth <= 0) continue;
+    const created = Date.parse(session.createdAt);
+    const parent = list
+      .filter((other) => {
+        if (other.sessionId === session.sessionId) return false;
+        if (Number(origins[other.sessionId]?.depth ?? 0) !== depth - 1) return false;
+        if (!sameAgent(other.agentId, origin.from)) return false;
+        const otherAt = Date.parse(other.createdAt);
+        return !Number.isFinite(created) || !Number.isFinite(otherAt) || otherAt <= created;
+      })
+      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0];
+    if (parent) parentOf.set(session.sessionId, parent.sessionId);
+  }
+  const children = new Map();
+  for (const [id, parent] of parentOf) {
+    if (!children.has(parent)) children.set(parent, []);
+    children.get(parent).push(id);
+  }
+  const newest = [...list].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+  const seen = new Set();
+  const out = [];
+  const walk = (session, depth, stack) => {
+    if (!session || seen.has(session.sessionId) || stack.has(session.sessionId)) return;
+    seen.add(session.sessionId);
+    stack.add(session.sessionId);
+    out.push({ session, depth });
+    const kids = (children.get(session.sessionId) || [])
+      .map((id) => byId.get(id))
+      .filter(Boolean)
+      .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+    for (const kid of kids) walk(kid, depth + 1, stack);
+    stack.delete(session.sessionId);
+  };
+  for (const session of newest) {
+    if (!parentOf.has(session.sessionId)) walk(session, 0, new Set());
+  }
+  for (const session of newest) walk(session, 0, new Set());
+  return out;
 }
 
 export function statusColor(status) {

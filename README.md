@@ -56,6 +56,8 @@ npm run setup -- --opencode-model openrouter/qwen/qwen3-coder
 npm run setup -- --policy read-only                      # read-only | workspace-write (defecto) | danger-full-access
 npm run setup -- --scope project                         # user (defecto) | project | local
 npm run setup -- --no-register --no-skill
+npm run setup -- --no-bridge          # MCP stdio directo, sin puente
+npm run setup -- --connect all        # puente en Claude, Codex, Cursor y OpenCode
 ```
 
 El setup es idempotente: vuelve a correrlo cuando instales otro agente o quieras cambiar algo.
@@ -78,6 +80,35 @@ Un buen prompt de delegación tiene cuatro cosas: **tarea, alcance, entrega y pr
 
 Para ver los agentes en vivo desde otra terminal: `npx agent-rack watch`.
 
+## Tres modos
+
+### Claude manager
+
+Claude Code tiene el MCP `agent-rack` apuntando a `silka bridge`. Pides una delegación y la sesión corre en el hub compartido:
+
+```text
+delega a OpenCode, en este repo: responde solo ok
+```
+
+### TUI
+
+Otra terminal maneja las mismas sesiones y muestra quién las lanzó:
+
+```bash
+npm run silka -- ui
+```
+
+### Puente entre agentes
+
+Codex, Cursor y OpenCode pueden usar el mismo hub. Un agente lanza a otro y el TUI anida la sesión hija bajo quien la abrió. `SILKA_MAX_DEPTH` (por defecto 2) corta la cadena para que no se deleguen sin fin.
+
+```bash
+npm run silka -- connect all
+npm run silka -- disconnect codex
+```
+
+`connect claude` reemplaza el registro stdio suelto de agent-rack. El setup lo hace solo; `--no-bridge` lo omite y `--connect all` registra los cuatro.
+
 ## TUI (silka)
 
 `silka` arranca el hub SSE de agent-rack y maneja varias sesiones desde la terminal.
@@ -91,13 +122,17 @@ npm run silka -- steer <id> "no toques README.md"
 npm run silka -- note <id> "revisa el diff antes de aceptar"
 npm run silka -- ui
 npm run silka -- mcp
+npm run silka -- bridge
+npm run silka -- connect codex
 ```
 
 `hub` usa `agent-rack.config.json` y escucha en `http://127.0.0.1:8987/sse` (o el `port` de la config). Si ya hay un hub con token y pid válidos, lo dice y sale sin error.
 
 `steer` cancela la sesión y abre otra con el mismo agente, modelo y workspace. El prompt nuevo lleva la instrucción del usuario y pide seguir desde los archivos como están: agent-rack no reanuda una sesión cancelada. `note` guarda una nota en `~/.config/silka/notes.jsonl`. `mcp` expone `silka_notes` para que el manager las lea.
 
-En `ui`, el encabezado muestra el puerto del hub (vivo o caído) y cuántas sesiones hay. ↑/↓ elige. Cada fila tiene ícono y color según el estado, el agente, el modelo, el tiempo y una marca si hay mensajes en cola (`Q`) o notas (`N`). A la derecha va la actividad en vivo (pasos cortos, no JSON) con el resumen debajo cuando termina. Abajo, Enter envía; si el turno sigue `running`, el mensaje queda **en cola**. `n` crea una sesión (agente con flechas, modelo opcional, prompt multilínea: Enter es otra línea y Ctrl+S envía). `i` redirige, `m` deja una nota, `c` cancela con confirmación, `?` abre la ayuda y `q` sale. Sin hub, el error dice `corre: silka hub`.
+En `ui`, el encabezado muestra el puerto del hub (vivo o caído) y cuántas sesiones hay. ↑/↓ elige. Cada fila tiene ícono y color según el estado, el agente, el origen (`tú`, `claude-code`, `codex`…), el tiempo y una marca si hay mensajes en cola (`Q`) o notas (`N`). Si una sesión la lanzó otra, queda anidada debajo. A la derecha va la actividad en vivo (pasos cortos, no JSON; el texto `✎` espera un salto de línea o una pausa para no cortar una palabra) con el resumen debajo cuando termina. Abajo, Enter envía; si el turno sigue `running`, el mensaje queda **en cola**. `n` crea una sesión (agente con flechas, modelo opcional, prompt multilínea: Enter es otra línea y Ctrl+S envía). `i` redirige, `m` deja una nota, `c` cancela con confirmación, `?` abre la ayuda y `q` sale. Sin hub, el error dice `corre: silka hub`.
+
+`bridge` es el servidor MCP por stdio que reexpone las herramientas del hub (y `silka_notes`). Si el hub no está, lo arranca aparte y espera. `connect` / `disconnect` registran ese puente con el nombre `agent-rack`.
 
 ## Cómo funciona
 

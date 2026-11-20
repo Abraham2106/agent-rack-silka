@@ -1,7 +1,8 @@
 import path from 'node:path';
-import { formatDuration, isBusy, pad, promptPreview, shortId } from './format.mjs';
+import { formatDuration, isBusy, originLabel, pad, promptPreview, shortId } from './format.mjs';
 import { readMeta, readPrompts, rememberSession } from './hub.mjs';
 import { appendNote } from './notes.mjs';
+import { readOrigins } from './origin.mjs';
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -40,15 +41,16 @@ export function matchSession(sessions, id) {
 export async function listSessionsCommand(client, port) {
   const sessions = await client.listSessions();
   const prompts = readPrompts(port);
+  const origins = readOrigins();
   if (!Array.isArray(sessions) || sessions.length === 0) {
     console.log('No hay sesiones.');
     return;
   }
-  console.log(`${pad('id', 10)}${pad('agente', 12)}${pad('estado', 12)}${pad('tiempo', 10)}prompt`);
+  console.log(`${pad('id', 10)}${pad('agente', 12)}${pad('estado', 12)}${pad('tiempo', 10)}${pad('origen', 16)}prompt`);
   for (const session of sessions) {
     const prompt = promptPreview(prompts[session.sessionId] || session.summary || '');
     console.log(
-      `${pad(shortId(session.sessionId), 10)}${pad(session.agentId, 12)}${pad(session.status, 12)}${pad(formatDuration(session), 10)}${prompt}`,
+      `${pad(shortId(session.sessionId), 10)}${pad(session.agentId, 12)}${pad(session.status, 12)}${pad(formatDuration(session), 10)}${pad(originLabel(origins[session.sessionId]), 16)}${prompt}`,
     );
   }
 }

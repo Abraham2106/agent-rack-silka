@@ -13,8 +13,12 @@ function printHelp() {
   silka note <id> "<texto>"
   silka ui
   silka mcp
+  silka bridge
+  silka connect <claude|codex|cursor|opencode|all> [--dry-run]
+  silka disconnect <claude|codex|cursor|opencode|all> [--dry-run]
 
-Sin hub, los comandos responden: corre: silka hub`);
+Sin hub, los comandos responden: corre: silka hub
+bridge es el MCP por stdio que comparte ese hub.`);
 }
 
 async function main() {
@@ -32,6 +36,20 @@ async function main() {
     const { startMcp } = await import('./mcp.mjs');
     await startMcp();
     return 'stay';
+  }
+  if (cmd === 'bridge') {
+    const { startBridge } = await import('./bridge.mjs');
+    await startBridge();
+    return 'stay';
+  }
+  if (cmd === 'connect' || cmd === 'disconnect') {
+    const { connectHarness, disconnectHarness } = await import('./connect.mjs');
+    const dryRun = argv.includes('--dry-run');
+    const target = argv.slice(1).find((arg) => !arg.startsWith('--'));
+    if (!target) throw new Error(`Uso: silka ${cmd} <claude|codex|cursor|opencode|all> [--dry-run]`);
+    const text = cmd === 'connect' ? connectHarness(target, { dryRun }) : disconnectHarness(target, { dryRun });
+    console.log(text);
+    return;
   }
   if (!['ls', 'run', 'send', 'steer', 'note', 'ui'].includes(cmd)) {
     printHelp();

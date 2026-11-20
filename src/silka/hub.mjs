@@ -125,6 +125,31 @@ export function hubStatus() {
   };
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Arranca el hub separado de este proceso si no hay uno vivo, y espera el token. */
+export async function ensureHub() {
+  const current = hubStatus();
+  if (current.alive && current.runtime?.token) return current;
+  const bin = path.join(current.root, 'node_modules', 'agent-rack', 'bin', 'agent-rack.js');
+  const child = spawn(process.execPath, [bin, 'start', '-t', 'sse', '-c', current.configPath], {
+    cwd: current.root,
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  child.unref();
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    const status = hubStatus();
+    if (status.alive && status.runtime?.token) return status;
+    await sleep(250);
+  }
+  throw new HubError('el hub no respondió a tiempo');
+}
+
 export async function startHub() {
   const status = hubStatus();
   if (status.alive) {

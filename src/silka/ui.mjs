@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Box, Text, render, useApp, useInput, useStdout } from 'ink';
 import { redirectSession } from './commands.mjs';
-import { activityFromEvents, clip, formatDuration, isBusy, promptPreview, shortId, statusColor, statusIcon } from './format.mjs';
+import { activityFromEvents, clip, formatDuration, isBusy, nestSessions, originLabel, promptPreview, shortId, statusColor, statusIcon } from './format.mjs';
 import { readMeta, rememberSession } from './hub.mjs';
 import { appendNote, unreadSessionIds } from './notes.mjs';
+import { readOrigins } from './origin.mjs';
 
 const h = React.createElement;
 
@@ -48,6 +49,7 @@ export function App({ client, port, agents, models = {} }) {
   const [queues, setQueues] = useState({});
   const [banner, setBanner] = useState(null);
   const [meta, setMeta] = useState(() => readMeta(port));
+  const [origins, setOrigins] = useState(() => readOrigins());
   const [noted, setNoted] = useState(() => unreadSessionIds());
   const [hubOk, setHubOk] = useState(true);
   const [mode, setMode] = useState('main');
@@ -61,6 +63,7 @@ export function App({ client, port, agents, models = {} }) {
   const inflightRef = useRef({});
   const wizardRef = useRef(null);
   const modeRef = useRef('main');
+  const orderRef = useRef([]);
 
   sessionsRef.current = sessions;
   selectedIdRef.current = selectedId;
@@ -103,6 +106,7 @@ export function App({ client, port, agents, models = {} }) {
         const sessionsNow = Array.isArray(list) ? list : [];
         setSessions(sessionsNow);
         setMeta(readMeta(port));
+        setOrigins(readOrigins());
         setNoted(unreadSessionIds());
         setHubOk(true);
 
@@ -341,14 +345,14 @@ export function App({ client, port, agents, models = {} }) {
     }
 
     if (banner) setBanner(null);
-    const list = sessionsRef.current;
+    const list = orderRef.current.length ? orderRef.current : sessionsRef.current.map((session) => ({ session, depth: 0 }));
     if (key.upArrow || key.downArrow) {
       if (!list.length) return;
-      let index = list.findIndex((session) => session.sessionId === selectedIdRef.current);
+      let index = list.findIndex((item) => item.session.sessionId === selectedIdRef.current);
       if (index < 0) index = 0;
       const delta = key.upArrow ? -1 : 1;
       const next = list[Math.min(list.length - 1, Math.max(0, index + delta))];
-      setSelectedId(next.sessionId);
+      setSelectedId(next.session.sessionId);
       return;
     }
     if (key.return) {
@@ -421,15 +425,17 @@ export function App({ client, port, agents, models = {} }) {
   else if (mode === 'steer' || mode === 'note') composerInner = 2;
   const composerH = Math.min(composerInner + 2, Math.max(3, rows - 8));
   const bodyH = Math.max(1, rows - composerH - 3);
+  const ordered = nestSessions(sessions, origins, meta);
+  orderRef.current = ordered;
   const listRoom = Math.max(1, bodyH - 3);
   const visibleCount = Math.max(1, Math.floor(listRoom / 2));
-  let selectedIndex = sessions.findIndex((session) => session.sessionId === selected?.sessionId);
+  let selectedIndex = ordered.findIndex((item) => item.session.sessionId === selected?.sessionId);
   if (selectedIndex < 0) selectedIndex = 0;
   let windowStart = 0;
-  if (sessions.length > visibleCount) {
-    windowStart = Math.min(Math.max(0, selectedIndex - Math.floor(visibleCount / 2)), sessions.length - visibleCount);
+  if (ordered.length > visibleCount) {
+    windowStart = Math.min(Math.max(0, selectedIndex - Math.floor(visibleCount / 2)), ordered.length - visibleCount);
   }
-  const visibleSessions = sessions.slice(windowStart, windowStart + visibleCount);
+  const visibleSessions = ordered.slice(windowStart, windowStart + visibleCount);
 
   const rightInner = Math.max(1, bodyH - 2);
   const summaryBudget = summaryText ? Math.min(5, Math.max(2, Math.floor(rightInner / 3))) : 0;
@@ -440,13 +446,15 @@ export function App({ client, port, agents, models = {} }) {
 
   const sessionLabel = `${sessions.length} ${sessions.length === 1 ? 'sesión' : 'sesiones'}`;
 
-  const sessionRows = visibleSessions.map((session) => {
+  const sessionRows = visibleSessions.map(({ session, depth }) => {
     const active = selected?.sessionId === session.sessionId;
     const info = meta[session.sessionId] || {};
     const model = info.model || models[session.agentId] || '';
+    const origin = originLabel(origins[session.sessionId]);
     const marks = `${queues[session.sessionId]?.length ? 'Q' : ''}${noted.has(session.sessionId) ? 'N' : ''}`;
+    const indent = depth ? `${'  '.repeat(Math.min(depth, 4))}↳ ` : '';
     const head = clip(
-      `${statusIcon(session.status)} ${shortId(session.sessionId)} ${session.agentId} ${formatDuration(session)}${marks ? ` ${marks}` : ''}`,
+      `${indent}${statusIcon(session.status)} ${shortId(session.sessionId)} ${session.agentId} ${origin} ${formatDuration(session)}${marks ? ` ${marks}` : ''}`,
       innerLeft,
     );
     const sub = info.steeredFrom
@@ -520,7 +528,8 @@ export function App({ client, port, agents, models = {} }) {
     '?         esta ayuda',
     'q         salir',
     'Q en la lista: hay mensajes en cola.  N: hay notas sin leer.',
-    '↳ une la sesión nueva con la que redirigiste.',
+    '↳ une la sesión nueva con la que redirigiste, o una hija bajo quien la lanzó.',
+    'El origen (tú, claude-code, codex…) dice quién abrió la sesión.',
   ];
 
   const panels = mode === 'help'
@@ -536,7 +545,7 @@ export function App({ client, port, agents, models = {} }) {
       h(
         Box,
         { width: leftWidth, height: bodyH, flexDirection: 'column', borderStyle: 'single', borderColor: 'gray', paddingX: 1, overflow: 'hidden' },
-        h(Text, { bold: true }, sessions.length > visibleCount ? `Sesiones ${windowStart + 1}-${windowStart + visibleSessions.length}/${sessions.length}` : 'Sesiones'),
+        h(Text, { bold: true }, ordered.length > visibleCount ? `Sesiones ${windowStart + 1}-${windowStart + visibleSessions.length}/${ordered.length}` : 'Sesiones'),
         sessions.length ? sessionRows : h(Text, { dimColor: true }, 'Sin sesiones. n crea una.'),
       ),
       h(
@@ -548,10 +557,11 @@ export function App({ client, port, agents, models = {} }) {
             { bold: true, wrap: 'truncate' },
             `${statusIcon(selected.status)} ${selected.agentId} `,
             h(Text, { color: statusColor(selected.status) }, selected.status),
-            `  ${shortId(selected.sessionId)}`,
+            `  ${shortId(selected.sessionId)}  `,
+            h(Text, { dimColor: true }, originLabel(origins[selected.sessionId])),
           )
           : h(Text, { bold: true }, 'Actividad'),
-        h(Text, { dimColor: true, wrap: 'truncate' }, selectedMeta?.steeredFrom ? `viene de ${shortId(selectedMeta.steeredFrom)}` : ' '),
+        h(Text, { dimColor: true, wrap: 'truncate' }, selectedMeta?.steeredFrom ? `viene de ${shortId(selectedMeta.steeredFrom)}` : `origen ${selected ? originLabel(origins[selected.sessionId]) : ''}`),
         h(
           Text,
           { dimColor: true, wrap: 'truncate' },

@@ -44,6 +44,23 @@ for (let i = 0; i < rest.length; i++) {
 const prompt = positionals.at(-1) ?? '';
 const readOnly = opts['permission-mode'] === 'plan';
 
+const SILKA_MARK = /^\[silka depth=(\d+) from=([^\]]*)\]\s*/;
+
+/** La marca la pone el bridge porque el hub no hereda el entorno de quien llama. */
+export function readSilkaMark(text) {
+  const raw = String(text ?? '');
+  const match = raw.match(SILKA_MARK);
+  if (!match) return { prompt: raw, depth: null, from: null };
+  return { prompt: raw.slice(match[0].length), depth: Number(match[1]), from: match[2] };
+}
+
+function silkaChildEnv(agent, rawPrompt) {
+  const mark = readSilkaMark(rawPrompt);
+  const base = mark.depth ?? Number(process.env.SILKA_DEPTH || 0);
+  const depth = Number.isFinite(base) ? base + 1 : 1;
+  return { SILKA_DEPTH: String(depth), SILKA_AGENT: agent };
+}
+
 function emit(obj, code) {
   process.stdout.write(JSON.stringify({ type: 'result', ...obj }) + '\n');
   process.exit(code);
@@ -213,28 +230,32 @@ function freshState() {
   };
 }
 
+function pencilLine(text) {
+  const clean = String(text ?? '').replace(/[ \t]+/g, ' ').trim();
+  return clean ? [`✎ ${clean}`] : [];
+}
+
+/** Junta los deltas hasta un salto de línea. El corte a media palabra queda para el flush de la pausa. */
 function takeText(state, chunk) {
   if (!chunk) return [];
   if (state.acc && chunk.startsWith(state.acc)) state.acc = chunk;
   else state.acc += chunk;
-  const fresh = state.acc.slice(state.at);
-  const newline = fresh.indexOf('\n');
-  if (newline >= 0) {
-    const piece = clipStep(fresh.slice(0, newline), 72);
+  const lines = [];
+  let fresh = state.acc.slice(state.at);
+  let newline = fresh.indexOf('\n');
+  while (newline >= 0) {
+    lines.push(...pencilLine(fresh.slice(0, newline)));
     state.at += newline + 1;
-    return piece ? [`✎ ${piece}`] : [];
+    fresh = state.acc.slice(state.at);
+    newline = fresh.indexOf('\n');
   }
-  if (fresh.length < 72) return [];
-  const piece = fresh.slice(0, 72).replace(/\s+/g, ' ').trim();
-  state.at += 72;
-  return piece ? [`✎ ${piece}`] : [];
+  return lines;
 }
 
 function flushText(state) {
-  const piece = clipStep(state.acc.slice(state.at), 72);
-  state.acc = '';
-  state.at = 0;
-  return piece ? [`✎ ${piece}`] : [];
+  const lines = pencilLine(state.acc.slice(state.at));
+  state.at = state.acc.length;
+  return lines;
 }
 
 function rememberCall(state, id, line) {
@@ -291,8 +312,7 @@ export function onOpencodeEvent(ev, state) {
   state.session_id ||= ev.sessionID || ev.session_id;
   if (ev.type === 'text' && ev.part?.text) {
     state.texts.push(ev.part.text);
-    const piece = clipStep(ev.part.text, 72);
-    return piece ? [`✎ ${piece}`] : [];
+    return takeText(state, ev.part.text);
   }
   if (ev.type === 'tool_use' || ev.type === 'tool') {
     const part = ev.part || ev;
@@ -355,9 +375,10 @@ function opencodeSpec() {
   if (model) args.push('-m', model);
   if (opts.resume) args.push('-s', opts.resume);
   if (readOnly) args.push('--agent', 'plan');
+  const clean = readSilkaMark(prompt).prompt;
   // OpenCode resuelve rutas relativas contra la raíz del repo git, no contra el cwd.
-  args.push(`[Directorio de trabajo: ${process.cwd()} (las rutas relativas son relativas a este directorio)]\n\n${prompt}`);
-  return { cmd: l.cmd, args: [...l.pre, ...args], kind: 'opencode' };
+  args.push(`[Directorio de trabajo: ${process.cwd()} (las rutas relativas son relativas a este directorio)]\n\n${clean}`);
+  return { cmd: l.cmd, args: [...l.pre, ...args], kind: 'opencode', env: silkaChildEnv('opencode', prompt) };
 }
 
 function cursorSpec() {
@@ -370,8 +391,13 @@ function cursorSpec() {
   if (opts.resume) args.push('--resume', opts.resume);
   if (readOnly) args.push('--mode', 'plan');
   else args.push('--force'); // con -p y sin --force los comandos de shell quedan bloqueados
-  args.push(prompt);
-  return { cmd: l.cmd, args: [...l.pre, ...args], kind: 'cursor', env: { CURSOR_INVOKED_AS: 'cursor-agent' } };
+  args.push(readSilkaMark(prompt).prompt);
+  return {
+    cmd: l.cmd,
+    args: [...l.pre, ...args],
+    kind: 'cursor',
+    env: { CURSOR_INVOKED_AS: 'cursor-agent', ...silkaChildEnv('cursor', prompt) },
+  };
 }
 
 // ---- Codex: passthrough -----------------------------------------------------
@@ -381,8 +407,14 @@ function cursorSpec() {
 function runCodex(argv) {
   const l = resolve('codex', 'CODEX_BIN');
   if (!l) { process.stderr.write('No encontré Codex en el PATH (npm i -g @openai/codex o define CODEX_BIN).\n'); process.exit(127); }
-  const args = argv[0] === 'resume' && argv[1] === 'exec' ? ['exec', 'resume', ...argv.slice(2)] : argv;
-  const child = spawn(l.cmd, [...l.pre, ...args], { stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true });
+  const args = argv[0] === 'resume' && argv[1] === 'exec' ? ['exec', 'resume', ...argv.slice(2)] : [...argv];
+  const rawPrompt = args.at(-1) ?? '';
+  if (args.length) args[args.length - 1] = readSilkaMark(rawPrompt).prompt;
+  const child = spawn(l.cmd, [...l.pre, ...args], {
+    stdio: ['ignore', 'inherit', 'inherit'],
+    windowsHide: true,
+    env: { ...process.env, ...silkaChildEnv('codex', rawPrompt) },
+  });
   for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => child.kill());
   child.on('error', (e) => { process.stderr.write(`No pude iniciar codex: ${e.message}\n`); process.exit(127); });
   child.on('close', (code) => process.exit(code ?? 1));
@@ -417,12 +449,20 @@ function runTranslated(spec) {
   let out = '';
   let err = '';
   let buf = '';
+  let pause;
+  const armPause = () => {
+    clearTimeout(pause);
+    if (!state.acc.slice(state.at).trim()) return;
+    pause = setTimeout(() => publish(state, flushText(state)), 450);
+    pause.unref?.();
+  };
   const feed = (line) => {
     if (!line.trim()) return;
     let ev;
     try { ev = JSON.parse(line); } catch { return; }
     const lines = spec.kind === 'cursor' ? onCursorEvent(ev, state) : onOpencodeEvent(ev, state);
     publish(state, lines);
+    armPause();
   };
   child.stdout.on('data', (chunk) => {
     const text = chunk.toString('utf8');
@@ -440,7 +480,9 @@ function runTranslated(spec) {
   for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => child.kill());
   child.on('error', (e) => fail(`No pude iniciar ${target}: ${e.message}`));
   child.on('close', (code) => {
+    clearTimeout(pause);
     if (buf.trim()) feed(buf);
+    clearTimeout(pause);
     publish(state, flushText(state));
     writeLog(spec, code, out, err);
     const result = spec.kind === 'cursor' ? finishCursor(state, out, err) : finishOpencode(state);
