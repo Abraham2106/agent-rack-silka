@@ -41,7 +41,11 @@ test('la marca sin nonce del hub no sube la profundidad', () => {
 });
 
 test('cursor usa --force solo con danger-full-access y plan gana', () => {
-  assert.equal(cursorLaunchArgs({ policy: 'workspace-write' }).includes('--force'), false);
+  // workspace-write: sandbox real en macOS/Linux; en Windows no hay sandbox → --force salvo SILKA_CURSOR_FORCE=0
+  const linux = cursorLaunchArgs({ policy: 'workspace-write', platform: 'linux', env: {} });
+  assert.deepEqual(linux.slice(-3), ['--sandbox', 'enabled', '--force']);
+  assert.equal(cursorLaunchArgs({ policy: 'workspace-write', platform: 'win32', env: {} }).includes('--force'), true);
+  assert.equal(cursorLaunchArgs({ policy: 'workspace-write', platform: 'win32', env: { SILKA_CURSOR_FORCE: '0' } }).includes('--force'), false);
   assert.equal(cursorLaunchArgs({ policy: 'read-only' }).includes('--mode'), true);
   assert.equal(cursorLaunchArgs({ policy: 'read-only' }).includes('--force'), false);
   const full = cursorLaunchArgs({ policy: 'danger-full-access' });

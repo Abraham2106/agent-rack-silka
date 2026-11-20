@@ -498,13 +498,25 @@ function opencodeSpec() {
   };
 }
 
-export function cursorLaunchArgs({ model, resume, permissionMode, policy = 'workspace-write' } = {}) {
+/**
+ * Política → flags de Cursor en modo headless (-p). Sin --force, Cursor rechaza todo
+ * comando de shell fuera de su allowlist (por defecto solo `ls`), así que no puede
+ * correr tests ni git.
+ *  - read-only / plan  → --mode plan (sin escritura ni shell)
+ *  - workspace-write   → macOS/Linux: --sandbox enabled --force (sandbox real de Cursor)
+ *                        Windows: Cursor no tiene sandbox; --force, salvo SILKA_CURSOR_FORCE=0
+ *                        (entonces solo corre lo que permita ~/.cursor/cli-config.json)
+ *  - danger-full-access → --force sin sandbox
+ */
+export function cursorLaunchArgs({ model, resume, permissionMode, policy = 'workspace-write', platform = process.platform, env = process.env } = {}) {
   const args = ['-p', '--output-format', 'stream-json', '--stream-partial-output', '--trust'];
   if (model) args.push('--model', model);
   if (resume) args.push('--resume', resume);
   const plan = permissionMode === 'plan' || policy === 'read-only';
   if (plan) args.push('--mode', 'plan');
   else if (policy === 'danger-full-access') args.push('--force');
+  else if (platform !== 'win32') args.push('--sandbox', 'enabled', '--force');
+  else if (env.SILKA_CURSOR_FORCE !== '0') args.push('--force');
   return args;
 }
 

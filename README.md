@@ -171,7 +171,7 @@ npm run silka -- connect claude --with-graph
 - [`shims/agent-shim.mjs`](shims/agent-shim.mjs) es el puente:
   - **Codex**: `codex exec --json`. El shim deja en stdout el hilo y el mensaje final, y manda el resto a stderr como pasos (`→ mcp agent-rack.opencode_run`, `→ $ cmd`), para que el resumen no arrastre el JSON.
   - **OpenCode**: `opencode run --format json`, leído línea por línea y traducido al formato JSON de Claude Code. Le indica el directorio de trabajo, porque OpenCode resuelve rutas relativas contra la raíz del repo git.
-  - **Cursor**: `cursor-agent -p --output-format stream-json --stream-partial-output --trust`, leído línea por línea. `--permission-mode plan` se traduce a `--mode plan`. `--force` solo si la política es `danger-full-access`.
+  - **Cursor**: `cursor-agent -p --output-format stream-json --stream-partial-output --trust`, leído línea por línea. `--permission-mode plan` se traduce a `--mode plan`. Con `workspace-write`: en macOS/Linux `--sandbox enabled --force` (sandbox real); en Windows Cursor no tiene sandbox, así que usa `--force` (desactívalo con `SILKA_CURSOR_FORCE=0` y Cursor solo correrá lo que permita `~/.cursor/cli-config.json`).
   - **Actividad en vivo**: cada paso de Cursor y OpenCode sale al momento por stderr (`→ read src/x.ts`, `→ $ npm test`, `✎ texto`). stdout queda en la línea final `{"type":"result",...}`, así el resumen del manager sigue corto.
   - En Windows lee el `.cmd` de npm en el PATH para encontrar el `.exe` o `.js` real. Así el prompt llega intacto (saltos de línea, comillas, `&`, `%`) y sigue funcionando aunque el CLI se actualice y cambie de ruta.
   - La salida cruda de la última corrida queda en `~/.config/silka/logs/last-<agente>.log` (y la anterior en `.1`), con tokens redactados. No se escribe dentro del repo.
@@ -198,7 +198,7 @@ npm run silka -- connect claude --with-graph
 | Política | Cursor |
 |---|---|
 | `read-only` | `--mode plan`. No escribe. Sin `--force`. |
-| `workspace-write` | Sin `--force`: el CLI pide confirmación para el shell. `--trust` solo marca el workspace ya validado. |
+| `workspace-write` | macOS/Linux: `--sandbox enabled --force` (sandbox real de Cursor). Windows: `--force` sin sandbox, porque en headless Cursor rechaza todo comando fuera de su allowlist (por defecto solo `ls`). `SILKA_CURSOR_FORCE=0` lo desactiva. |
 | `danger-full-access` | Añade `--force` (aprueba solo). Si el turno pide `--permission-mode plan`, gana `--mode plan` y no se usa `--force`. |
 
 - Los agentes solo pueden trabajar dentro de `allowedWorkspaces`. El bridge rechaza un workspace con `..` o fuera de esa lista.
