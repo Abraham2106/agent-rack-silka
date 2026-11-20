@@ -8,15 +8,21 @@
   "engines": {
     "node": ">=20"
   },
+  "bin": {
+    "silka": "src/silka/cli.mjs"
+  },
   "scripts": {
     "setup": "node scripts/setup.mjs",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "silka": "node src/silka/cli.mjs"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Abraham2106/agent-rack-silka.git"
   },
   "dependencies": {
-    "agent-rack": "0.12.1"
+    "agent-rack": "0.12.1",
+    "ink": "^8.0.0",
+    "react": "^19.3.1"
   }
 }

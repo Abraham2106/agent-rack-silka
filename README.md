@@ -78,6 +78,22 @@ Un buen prompt de delegación tiene cuatro cosas: **tarea, alcance, entrega y pr
 
 Para ver los agentes en vivo desde otra terminal: `npx agent-rack watch`.
 
+## TUI (silka)
+
+`silka` arranca el hub SSE de agent-rack y maneja varias sesiones desde la terminal.
+
+```bash
+npm run silka -- hub
+npm run silka -- ls
+npm run silka -- run opencode "responde solo: ok" --model opencode/hy4-flash-free --workspace .
+npm run silka -- send <id> "responde solo: dos"
+npm run silka -- ui
+```
+
+`hub` usa `agent-rack.config.json` y escucha en `http://127.0.0.1:8987/sse` (o el `port` de la config). Si ya hay un hub con token y pid válidos, lo dice y sale sin error.
+
+En `ui`, ↑/↓ elige sesión. El estado se pinta según esté `running`, `completed` o `failed`. A la derecha va la actividad (últimas líneas, cada 1–2 s) y abajo una caja de texto: Enter envía; si el turno sigue `running`, el mensaje queda **en cola** y se manda solo al terminar. `n` crea una sesión (agente, modelo opcional, prompt), `c` cancela y `q` sale. Sin hub, el error dice `corre: silka hub`.
+
 ## Cómo funciona
 
 - [`shims/agent-shim.mjs`](shims/agent-shim.mjs) es el puente:
