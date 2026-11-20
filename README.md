@@ -1,6 +1,10 @@
-# agent-rack-silka
+<p align="center">
+  <img src="docs/assets/logo.png" alt="agent-rack-silka" width="220">
+</p>
 
-**Claude manda, Codex / OpenCode / Cursor trabajan.**
+<h1 align="center">agent-rack-silka</h1>
+
+<p align="center"><strong>Claude manda, Codex / OpenCode / Cursor trabajan.</strong></p>
 
 Claude Code delega tareas de código a otros agentes CLI con **un solo tool call MCP** y recibe
 solo la respuesta final (pocas líneas), sin el transcript. Es como un "CLI-anything" para
