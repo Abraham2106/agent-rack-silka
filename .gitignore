@@ -1,0 +1,6 @@
+node_modules/
+sandbox/
+shims/logs/
+smoke-*.txt
+# generado por npm run setup (rutas locales)
+agent-rack.config.json

@@ -1,0 +1,38 @@
+{
+  "transport": "stdio",
+  "enableSseSidecar": true,
+  "allowedWorkspaces": ["/ruta/a/tus/proyectos"],
+  "agents": {
+    "codex": {
+      "name": "Codex CLI",
+      "command": "node",
+      "args": ["/ruta/a/agent-rack-silka/shims/agent-shim.mjs", "codex", "exec", "--json", "--skip-git-repo-check"],
+      "transport": "codex_exec_json",
+      "model": "gpt-6.1-sol",
+      "description": "OpenAI Codex. Sandbox real (read-only / workspace-write)."
+    },
+    "opencode": {
+      "name": "OpenCode",
+      "command": "node",
+      "args": ["/ruta/a/agent-rack-silka/shims/agent-shim.mjs", "opencode"],
+      "transport": "claude_stream_json",
+      "model": "opencode/hy4-flash-free",
+      "description": "OpenCode (model=proveedor/modelo)."
+    },
+    "cursor": {
+      "name": "Cursor Agent",
+      "command": "node",
+      "args": ["/ruta/a/agent-rack-silka/shims/agent-shim.mjs", "cursor"],
+      "transport": "claude_stream_json",
+      "description": "Cursor CLI. mode=plan es solo lectura."
+    }
+  },
+  "security": {
+    "executionPolicy": "workspace-write",
+    "sanitizeEnv": true,
+    "maxConcurrentSessions": 5,
+    "defaultTimeoutSeconds": 900,
+    "sessionRetentionMinutes": 120,
+    "requireSseAuth": true
+  }
+}

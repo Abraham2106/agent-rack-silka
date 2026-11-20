@@ -1,0 +1,22 @@
+{
+  "name": "agent-rack-silka",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Claude manda, Codex / OpenCode / Cursor trabajan: agent-rack listo para Windows, macOS y Linux con setup de un comando.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Abraham2106/agent-rack-silka.git"
+  },
+  "dependencies": {
+    "agent-rack": "0.12.1"
+  }
+}
