@@ -14,7 +14,7 @@
   "scripts": {
     "setup": "node scripts/setup.mjs",
     "smoke": "node scripts/smoke.mjs",
-    "test": "node --test test/shim.test.mjs test/state.test.mjs test/notes.test.mjs test/bridge.test.mjs test/format.test.mjs test/transcript.test.mjs test/queue.test.mjs test/send.test.mjs test/models.test.mjs test/concurrency.test.mjs test/codemode.test.mjs test/hub.test.mjs test/tasks.test.mjs",
+    "test": "node --test test/shim.test.mjs test/state.test.mjs test/notes.test.mjs test/bridge.test.mjs test/format.test.mjs test/transcript.test.mjs test/queue.test.mjs test/send.test.mjs test/models.test.mjs test/concurrency.test.mjs test/codemode.test.mjs test/hub.test.mjs test/tasks.test.mjs test/review.test.mjs",
     "silka": "node src/silka/cli.mjs"
   },
   "repository": {

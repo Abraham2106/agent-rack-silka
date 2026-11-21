@@ -25,6 +25,10 @@ function printHelp() {
   silka task run <archivo-plan> [--workspace dir]
   silka task ls [workspace]
   silka task verify <id> [workspace]
+  silka review ls [workspace]
+  silka review approve <id> --version N [workspace]
+  silka review reject <id> "<nota>" --version N [workspace]
+  silka review discard <id> --version N [workspace]
 
 Sin hub, los comandos responden: corre: silka hub
 bridge es el MCP por stdio que comparte ese hub.
@@ -150,6 +154,43 @@ ${agent}  (${cat.models.length}${cat.total > cat.models.length ? ` de ${cat.tota
       return;
     }
     throw new Error('Uso: silka task run|ls|verify ...');
+  }
+  if (cmd === 'review') {
+    const sub = argv[1];
+    const { parseArgs } = await import('./commands.mjs');
+    const { reviewApprove, reviewDiscard, reviewList, reviewReject } = await import('./review/cli.mjs');
+    const { flags, positional } = parseArgs(argv.slice(2));
+    const version = Number(flags.version);
+    if (sub === 'ls') {
+      reviewList(flags.workspace || positional[0] || process.cwd());
+      return;
+    }
+    const id = positional[0];
+    const ws = positional[1] || flags.workspace || process.cwd();
+    if (sub === 'approve') {
+      if (!id || !Number.isFinite(version)) throw new Error('Uso: silka review approve <id> --version N [workspace]');
+      reviewApprove(id, ws, { version });
+      return;
+    }
+    if (sub === 'reject') {
+      const note = positional[1];
+      const wsReject = positional[2] || flags.workspace || process.cwd();
+      if (!id || !note || !Number.isFinite(version)) {
+        throw new Error('Uso: silka review reject <id> "<nota>" --version N [workspace]');
+      }
+      const { withClient } = await import('./hub.mjs');
+      const { createHubCallAdapter } = await import('./tasks/hub-call.mjs');
+      await withClient(async (client) => {
+        await reviewReject(id, note, wsReject, { version, callHub: createHubCallAdapter(client) });
+      });
+      return;
+    }
+    if (sub === 'discard') {
+      if (!id || !Number.isFinite(version)) throw new Error('Uso: silka review discard <id> --version N [workspace]');
+      reviewDiscard(id, ws, { version });
+      return;
+    }
+    throw new Error('Uso: silka review ls|approve|reject|discard ...');
   }
   if (cmd === 'connect' || cmd === 'disconnect') {
     const { connectHarness, disconnectHarness } = await import('./connect.mjs');

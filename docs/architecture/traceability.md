@@ -37,7 +37,7 @@ Estados: `—` sin empezar · `Diseño` especificado · `Construcción` en curso
 | FR-TK-08 tope de simultaneidad | — | Gestor de tareas | T-CC-09 | Entregado |
 | FR-TK-09 puertos | — | Gestor de tareas | T-CC-09 (D-08) | Entregado (comprobación de puerto libre simplificada) |
 | FR-TK-10 fuera de scope | — | Gestor de tareas | T-TK-03 | Entregado |
-| FR-RV-01…08 bandeja | ADR-0006 | Bandeja (hub, TUI) | T-RV-01…05 | Diseño |
+| FR-RV-01…08 bandeja | ADR-0006 | Bandeja (hub, TUI) | T-RV-01…05 | Entregado |
 | FR-MQ-01 dueño único y fencing | ADR-0006, ADR-0007 | Cola de mezcla | T-MQ-03 | Diseño |
 | FR-MQ-02…05 pasos y fallos | ADR-0006 | Cola de mezcla | T-MQ-01, T-MQ-04 | Diseño |
 | FR-MQ-06 sin push ni reescritura | ADR-0006 | Cola de mezcla | Revisión de código + T-MQ-05 | Diseño |
@@ -59,7 +59,7 @@ Estados: `—` sin empezar · `Diseño` especificado · `Construcción` en curso
 | SEC-06 git sin hooks | TH-06 | T-TK-04 | Entregado (hooks fuera del repo, purgados en cada uso; T-TK-04) |
 | SEC-07 verify declarado | TH-07 | T-TK-01 | Entregado (prueba explícita) |
 | SEC-08 humano en riesgo alto | TH-08, TH-09 | T-RV-03 | Diseño |
-| SEC-09 ficha como dato | TH-09, TH-10 | T-RV-04 | Diseño |
+| SEC-09 ficha como dato | TH-09, TH-10 | T-RV-04 | Entregado |
 | SEC-10 CAS en update-ref | TH-17 | T-MQ-05 | Diseño |
 | SEC-11 redacción de secretos | TH-11 | T-SEC-08 | Parcial: existe para logs e historiales |
 | SEC-12 hub con token | TH-12 | T-SEC-09 | Entregado (agent-rack) |

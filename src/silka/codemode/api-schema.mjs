@@ -13,6 +13,17 @@ function assertOptionalString(value, name) {
   return assertString(value, name);
 }
 
+function assertReviewOpts(value) {
+  if (value == null || typeof value !== 'object') {
+    throw silkaError('E_POLICY', 'Se requiere { version } con el número de versión visto.');
+  }
+  const version = Number(value.version);
+  if (!Number.isFinite(version) || version < 1) {
+    throw silkaError('E_POLICY', 'Se requiere { version } con el número de versión visto.');
+  }
+  return { ...value, version };
+}
+
 export function validateIpcPayload(payload) {
   const raw = JSON.stringify(payload ?? {});
   if (Buffer.byteLength(raw, 'utf8') > MAX_IPC_MESSAGE_BYTES) {
@@ -66,6 +77,14 @@ export function validateApiArgs(path, args) {
       return [assertString(list[0], 'agent')];
     case 'agents.stats':
       return [assertString(list[0], 'agent'), assertString(list[1], 'model')];
+    case 'review.inbox':
+      return list;
+    case 'review.approve':
+      return [assertString(list[0], 'id'), assertReviewOpts(list[1])];
+    case 'review.reject':
+      return [assertString(list[0], 'id'), assertString(list[1], 'note'), assertReviewOpts(list[2])];
+    case 'review.discard':
+      return [assertString(list[0], 'id'), assertReviewOpts(list[1])];
     default:
       return list;
   }

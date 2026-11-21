@@ -24,5 +24,9 @@ export function createHubCallAdapter(client) {
       await client.cancelSession(args.sessionId);
       return { content: [{ type: 'text', text: JSON.stringify({ sessionId: args.sessionId, status: 'cancelled' }) }] };
     }
+    if (name === 'agent_session_send') {
+      await client.sendInput(args.sessionId, args.message);
+      return { content: [{ type: 'text', text: JSON.stringify({ sessionId: args.sessionId, sent: true }) }] };
+    }
   };
 }

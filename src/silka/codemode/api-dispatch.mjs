@@ -2,6 +2,7 @@ import nodePath from 'node:path';
 import { cachedModels, loadModels } from '../models.mjs';
 import { isBusy } from '../format.mjs';
 import { matchSession } from '../commands.mjs';
+import { createReviewService } from '../review/service.mjs';
 import { createTaskManager } from '../tasks/manager.mjs';
 import { planFromFile, planFromList } from '../tasks/plan.mjs';
 import { readTaskLogRef } from '../tasks/log-store.mjs';
@@ -10,10 +11,6 @@ import { silkaError } from './errors.mjs';
 import { getStoredRef } from './output-store.mjs';
 
 const NOT_IMPL = new Set([
-  'review.inbox',
-  'review.approve',
-  'review.reject',
-  'review.discard',
   'merge.queue',
   'merge.status',
   'agents.stats',
@@ -202,6 +199,32 @@ export function createApiDispatcher(ctx) {
         }
       }
       return models;
+    }
+
+    if (method === 'review.inbox') {
+      const svc = createReviewService(ctx.workspace, { actor: 'manager' });
+      return svc.inbox();
+    }
+
+    if (method === 'review.approve') {
+      const [taskId, opt = {}] = validated;
+      const svc = createReviewService(ctx.workspace, { actor: 'manager' });
+      return svc.approve(taskId, opt);
+    }
+
+    if (method === 'review.reject') {
+      const [taskId, note, opt = {}] = validated;
+      const svc = createReviewService(ctx.workspace, {
+        actor: 'manager',
+        callHub: ctx.callHub,
+      });
+      return svc.reject(taskId, note, opt);
+    }
+
+    if (method === 'review.discard') {
+      const [taskId, opt = {}] = validated;
+      const svc = createReviewService(ctx.workspace, { actor: 'manager' });
+      return svc.discard(taskId, opt);
     }
 
     throw silkaError('E_NOT_IMPLEMENTED', `Método de API desconocido: ${method}`);
