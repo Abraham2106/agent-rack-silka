@@ -74,6 +74,8 @@ export function normalizeTaskInput(raw, { id, repoRoot, strictVerify = false } =
     verify,
     verifySource,
     allowNoVerify,
+    // BUG-09: una tarea sin cambios falla la ficha salvo que se declare que puede no tenerlos.
+    allowEmptyDiff: Boolean(raw.allowEmptyDiff),
     accept: parseAccept(raw.accept),
     maxRepairs: Number.isInteger(maxRepairs) && maxRepairs >= 0 ? maxRepairs : 2,
     agent: raw.agent ? String(raw.agent) : undefined,

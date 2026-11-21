@@ -147,9 +147,29 @@ que su sesión llegara a arrancar; no se investigó más.
 **Riesgo:** una ficha vacía parece lista para aprobar. Es lo que `reliability` dice evitar (el estado depende de
 evidencia real, no de que el verify no falle). Detectado a mano, mirando `git status` de cada worktree.
 
-**Pendiente (no arreglado):** que una tarea sin diff, o con la sesión terminada en error, no pase a revisión
-(por ejemplo, `verificacion_fallida` o riesgo alto con motivo explícito) y prueba que lo cubra. Las 4 tareas se
-descartaron y se relanzaron (`-3`).
+Las 4 tareas se descartaron y se relanzaron (`-3`).
+
+**Arreglo (fase 1 del plan de estabilización):**
+- El supervisor guarda en la tarea cómo terminó la sesión (`sessionOutcome`: `completed`, `failed`,
+  `cancelled` o `desaparecida` si ya no está en el hub) y un detalle.
+- agent-rack marca `completed` aunque el agente termine con error: con un modelo inexistente, OpenCode deja
+  `status: completed` y un evento `result` con `is_error: true` ("Model unavailable"). El supervisor mira la cola
+  del log una vez al cerrar la sesión y, si el resultado es un error, la da por `failed`. Visto con agent-rack real.
+- `finishAgentTurn` agrega evidencia `session` (ok solo si `completed`) y `diff` (sin archivos cambiados → falla,
+  salvo `allowEmptyDiff: true` en la tarea). Si alguna falla, no se corren setup, verify ni accept.
+- Con la sesión caída no hay reparación automática (la sesión no se reanuda sola): `verificacion_fallida`.
+  Sin cambios y con la sesión bien, sí se le pide al agente que entregue (si le quedan reparaciones).
+- `card.mjs`: `allOk` = todos los ítems de evidencia ok (antes solo setup, verify y accept).
+- Hallazgo de la prueba real: el shim del agente escribe `.silka/tasks.json` en el worktree. En un repo que no
+  ignora `.silka/`, la tarea vacía salía "pass" con ese archivo como cambio (y `git add -A` de la mezcla lo habría
+  commiteado). Al crear el worktree, Silka agrega `.silka/` al `info/exclude` del repo (local, no versionado).
+- Pruebas: `test/session-evidence.test.mjs` (failed, cancelled, desaparecida, `is_error`, sin cambios, `.silka/`,
+  `allowEmptyDiff`, entrega buena, `allOk`).
+- **Prueba real:** `npm run e2e:ciclo` (`scripts/e2e-task-cycle.mjs`, nuevo) arranca agent-rack real en otro
+  puerto, lanza tareas en un repo desechable y corre el supervisor del hub con agentes reales (OpenCode,
+  `hy4-flash-free`). Escenarios `entrega` (pass con session+diff+verify), `vacio` (fail por diff, verify sin
+  correr) y `caida` (modelo inexistente → `failed`, fail, verify sin correr): los tres OK. `npm run e2e:worktree`
+  también OK.
 
 ### BUG-10 · Tope de sesiones de agent-rack y reintentos cada ~2 s
 

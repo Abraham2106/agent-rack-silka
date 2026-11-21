@@ -97,7 +97,7 @@ test('T-CC-09 (FR-TK-08): el excedente de maxConcurrentTasks entra en cola y ava
     assert.equal(row.worktreePath, null, 'sin worktree hasta que haya cupo');
   }
 
-  await mgr.runAgentTurn('tk-1', async () => {});
+  await mgr.runAgentTurn('tk-1', async (cwd) => { fs.writeFileSync(path.join(cwd, 'tk-1.txt'), 'ok'); });
   assert.equal(mgr.list().find((t) => t.id === 'tk-1').state, STATES.LISTA);
   mgr.markMerged('tk-1');
 

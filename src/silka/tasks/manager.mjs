@@ -89,6 +89,44 @@ function parseHubJson(result) {
   }
 }
 
+/** Evidencia de cómo terminó la sesión del agente; null si la tarea no tiene sesión del hub. */
+function sessionEvidence(task) {
+  if (!task.sessionId || !task.sessionOutcome) return null;
+  const outcome = task.sessionOutcome;
+  const ok = outcome === 'completed';
+  return {
+    kind: 'session',
+    ok,
+    cmd: '(sesión del agente)',
+    detail: ok
+      ? 'la sesión terminó bien'
+      : `la sesión del agente terminó: ${outcome}${task.sessionOutcomeDetail ? ` (${task.sessionOutcomeDetail})` : ''}`,
+    outcome,
+    sessionId: task.sessionId,
+    exitCode: null,
+    durationMs: 0,
+    ref: null,
+  };
+}
+
+/** Evidencia de que hubo entrega: sin archivos cambiados falla, salvo allowEmptyDiff. */
+function diffEvidence(diff, task) {
+  const n = (diff?.files || []).length;
+  const ok = n > 0 || Boolean(task.allowEmptyDiff);
+  return {
+    kind: 'diff',
+    ok,
+    cmd: '(cambios en el worktree)',
+    detail: n > 0
+      ? `${n} archivo(s) cambiado(s)`
+      : (ok ? 'sin cambios (allowEmptyDiff)' : 'el agente no cambió ningún archivo'),
+    files: n,
+    exitCode: null,
+    durationMs: 0,
+    ref: null,
+  };
+}
+
 export class TaskManager {
   constructor(workspace, opts = {}) {
     this.workspace = workspace;
@@ -208,6 +246,8 @@ export class TaskManager {
         row.awaitingHubSession = false;
         row.sessionAlive = true;
         delete row.startError;
+        delete row.sessionOutcome;
+        delete row.sessionOutcomeDetail;
         recordTransition(row, STATES.TRABAJANDO, 'inicio_sesion_hub');
         return store;
       });
@@ -306,6 +346,21 @@ export class TaskManager {
       const task = store.tasks.find((t) => t.id === taskId);
       if (!task) throw silkaError('E_NOT_FOUND', `Tarea no encontrada: ${taskId}`);
       task.sessionAlive = Boolean(alive);
+      return store;
+    });
+  }
+
+  /**
+   * BUG-09: guarda cómo terminó la sesión del agente (completed, failed, cancelled o
+   * desaparecida). Solo mientras la tarea está trabajando: es el dato de ese turno.
+   */
+  recordSessionOutcome(taskId, outcome, detail = '') {
+    mutateTaskStore(this.repoRoot, (store) => {
+      const row = store.tasks.find((t) => t.id === taskId);
+      if (!row || row.state !== STATES.TRABAJANDO) return store;
+      row.sessionOutcome = String(outcome || 'desaparecida');
+      if (detail) row.sessionOutcomeDetail = String(detail).slice(0, 300);
+      else delete row.sessionOutcomeDetail;
       return store;
     });
   }
@@ -442,6 +497,21 @@ export class TaskManager {
 
     // BUG-06: un worktree perdido nunca se verifica (los comandos correrían en otro repo).
     const worktreeOk = isValidWorktree(current.worktreePath);
+    // Sin worktree válido, git correría en otro repo: diff vacío.
+    const diff = worktreeOk
+      ? diffSummary(current.worktreePath, current.baseCommit, { repoRoot: this.repoRoot })
+      : { files: [], added: 0, removed: 0, statText: '' };
+
+    // BUG-09: antes la ficha salía "pass" con la sesión caída y sin un solo cambio, porque solo
+    // miraba el verify (y `npm test` pasa sobre un worktree intacto). Ahora cuentan también cómo
+    // terminó la sesión y que haya diff; si alguno falla, el verify ni se corre.
+    const sessionItem = sessionEvidence(current);
+    if (sessionItem) evidence.push(sessionItem);
+    if (worktreeOk) evidence.push(diffEvidence(diff, current));
+    const preOk = evidence.every((e) => e.ok);
+    const sessionOk = !sessionItem || sessionItem.ok;
+    allOk = preOk;
+
     if (!worktreeOk) {
       evidence.push({
         kind: 'setup',
@@ -453,6 +523,8 @@ export class TaskManager {
         ref: null,
       });
       allOk = false;
+    } else if (!preOk) {
+      // Sesión caída o sin cambios: no hay entrega que verificar; no se corre setup ni verify.
     } else if (current.setupDoneAt && current.setupLockHash === lockfileHash(current.worktreePath)) {
       // Setup hecho al crear el worktree y el lockfile no cambió: no se repite.
       evidence.push({ kind: 'setup', ok: true, cmd: '(setup al crear el worktree; lockfile sin cambios)', exitCode: 0, durationMs: 0, ref: null });
@@ -475,7 +547,7 @@ export class TaskManager {
       // Se suma a la del setup (antes la sobrescribía y la ficha perdía el setup).
       evidence = evidence.concat(vr.items);
       verifyRef = vr.verifyRef;
-      allOk = vr.ok;
+      allOk = allOk && vr.ok;
     }
     if (allOk && (current.accept || []).length) {
       const ar = runAcceptCriteria(this.repoRoot, taskId, current.worktreePath, current.accept, {
@@ -485,10 +557,6 @@ export class TaskManager {
       evidence = evidence.concat(ar.items);
       allOk = allOk && ar.ok;
     }
-    // Sin worktree válido, git correría en otro repo: diff vacío.
-    const diff = worktreeOk
-      ? diffSummary(current.worktreePath, current.baseCommit, { repoRoot: this.repoRoot })
-      : { files: [], added: 0, removed: 0, statText: '' };
     const card = buildDeliveryCard(current, {
       diff,
       evidence,
@@ -507,7 +575,8 @@ export class TaskManager {
         } else {
           const maxRepairs = Number.isInteger(row.maxRepairs) ? row.maxRepairs : 2;
           const repairs = Number(row.repairCount) || 0;
-          if (repairs < maxRepairs && row.sessionId) {
+          // Una sesión que falló, se canceló o desapareció no se reanuda sola: decide el humano.
+          if (sessionOk && repairs < maxRepairs && row.sessionId) {
             const repairId = `${row.id}-repair-${repairs + 1}`;
             const enriched = evidence.map((e) => {
               if (e.ref && !e.ok) {
@@ -556,6 +625,8 @@ export class TaskManager {
         row.repairDispatchId = pr.id;
         row.repairCount = (Number(row.repairCount) || 0) + 1;
         delete row.pendingRepair;
+        delete row.sessionOutcome;
+        delete row.sessionOutcomeDetail;
         recordTransition(row, STATES.TRABAJANDO, 'reparación_auto');
         row.sessionAlive = true;
         return store;

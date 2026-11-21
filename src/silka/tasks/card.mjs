@@ -13,14 +13,9 @@ export function buildDeliveryCard(task, {
   const { inScope, outOfScope } = partitionByScope(diff?.files || [], task.scope);
   const diffLines = (Number(diff?.added) || 0) + (Number(diff?.removed) || 0);
   const list = evidence || [];
-  const verifyItems = list.filter((e) => e.kind === 'verify');
-  const acceptItems = list.filter((e) => e.kind === 'accept');
-  const verifyOk = verifyItems.length ? verifyItems.every((e) => e.ok) : true;
-  const acceptOk = acceptItems.length ? acceptItems.every((e) => e.ok) : true;
-  // Un setup fallido también reprueba: antes la ficha salía "pass" sin haber verificado nada,
-  // porque el verify ni se corría y solo se miraban verify y accept.
-  const setupOk = list.filter((e) => e.kind === 'setup').every((e) => e.ok);
-  const allOk = setupOk && verifyOk && acceptOk;
+  // allOk = todos los ítems de evidencia ok (setup, sesión, diff, verify, accept). Antes se
+  // miraban solo algunos tipos y la ficha salía "pass" con la sesión caída o sin cambios (BUG-07/09).
+  const allOk = list.every((e) => e.ok);
   const risk = assessRisk({
     verifyOk: allOk,
     files: diff?.files,

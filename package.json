@@ -17,7 +17,8 @@
     "test": "node --test --import ./test/setup-env.mjs \"test/*.test.mjs\"",
     "silka": "node src/silka/cli.mjs",
     "spec:validate": "openspec validate --specs --strict",
-    "e2e:worktree": "node scripts/e2e-worktree-session.mjs"
+    "e2e:worktree": "node scripts/e2e-worktree-session.mjs",
+    "e2e:ciclo": "node scripts/e2e-task-cycle.mjs"
   },
   "repository": {
     "type": "git",

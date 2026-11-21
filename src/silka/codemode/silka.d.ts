@@ -31,6 +31,8 @@ export interface TaskSpec {
   verify?: string | string[];
   accept?: AcceptCriterion[];
   allowNoVerify?: boolean;
+  /** Sin esto, una tarea que no cambia ningún archivo reprueba la ficha (BUG-09). */
+  allowEmptyDiff?: boolean;
   maxRepairs?: number;
   agent?: string;
   model?: string;

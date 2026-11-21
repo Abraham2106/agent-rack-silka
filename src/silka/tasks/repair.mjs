@@ -19,7 +19,7 @@ export function buildRepairMessage({ evidence, verifyRef }) {
           parts.push(`Ver salida en ${e.ref}`);
         }
       } else {
-        parts.push(`Criterio ${e.type}: ${e.detail || e.pattern || e.path}`);
+        parts.push(`Criterio ${e.type || e.kind}: ${e.detail || e.pattern || e.path}`);
       }
       parts.push('');
     }

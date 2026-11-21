@@ -24,6 +24,32 @@ function repoRootsToWatch() {
   return [...roots];
 }
 
+/** Estado final de una sesión de agent-rack: completed, failed, cancelled (o lo que reporte). */
+export function sessionOutcomeOf(session) {
+  const status = String(session?.status || '').trim();
+  return status || 'desaparecida';
+}
+
+/**
+ * Cómo terminó de verdad la sesión. agent-rack marca `completed` aunque el agente acabe con
+ * error (p. ej. "Model unavailable": el último evento `result` trae `is_error: true`); visto con
+ * agent-rack real. Se mira la cola del log una sola vez, al terminar la sesión.
+ */
+export async function sessionOutcomeFor(client, session) {
+  if (!session) return { outcome: 'desaparecida', detail: 'la sesión ya no está en el hub' };
+  const outcome = sessionOutcomeOf(session);
+  const summary = String(session.summary || '').slice(0, 300);
+  if (outcome !== 'completed' || typeof client.getSessionLogTail !== 'function') return { outcome, detail: summary };
+  try {
+    const tail = await client.getSessionLogTail(session.sessionId, 10);
+    const result = [...(tail?.events || [])].reverse().find((e) => e?.metadata?.type === 'result');
+    if (result?.metadata?.is_error) {
+      return { outcome: 'failed', detail: String(result.metadata.result || result.content || summary).slice(0, 300) };
+    }
+  } catch { /* sin log: vale el estado que dio el hub */ }
+  return { outcome, detail: summary };
+}
+
 export async function superviseTasksOnce(client, { repoRoots, defaultAgent = 'codex', defaultModel = '', log = () => {} } = {}) {
   const callHub = createHubCallAdapter(client);
   let byId = new Map((await client.listSessions()).map((s) => [s.sessionId, s]));
@@ -56,6 +82,13 @@ export async function superviseTasksOnce(client, { repoRoots, defaultAgent = 'co
       const busy = session ? isBusy(session.status) : false;
       mgr.setSessionAlive(task.id, busy);
       if (!busy) {
+        // BUG-09: cómo terminó la sesión cuenta para la ficha. Una sesión que ya no aparece en
+        // el hub (se reinició agent-rack, se borró) no es un éxito.
+        if (!task.sessionOutcome) {
+          // eslint-disable-next-line no-await-in-loop
+          const { outcome, detail } = await sessionOutcomeFor(client, session);
+          mgr.recordSessionOutcome(task.id, outcome, detail);
+        }
         mgr.finalizePendingDiscard(task.id);
         if (mgr.tryFinishAfterSession(task.id)) n += 1;
       }
@@ -69,7 +102,7 @@ export async function superviseTasksOnce(client, { repoRoots, defaultAgent = 'co
 /** Un ciclo que no termina en este tiempo se da por colgado (p. ej. una respuesta del hub que no llega). */
 const TICK_HANG_MS = 120_000;
 
-export function startTaskSupervisor({ readRuntime, connect, intervalMs = 400, defaultAgent, defaultModel, log = (m) => console.error(m) } = {}) {
+export function startTaskSupervisor({ readRuntime, connect, intervalMs = 400, defaultAgent, defaultModel, repoRoots, log = (m) => console.error(m) } = {}) {
   let client = null;
   let token = '';
   let running = false;
@@ -97,7 +130,7 @@ export function startTaskSupervisor({ readRuntime, connect, intervalMs = 400, de
         client = await connect(runtime);
       }
       if (!client) log('[silka] supervisor de tareas: conectando con el hub');
-      if (client) await superviseTasksOnce(client, { defaultAgent, defaultModel, log });
+      if (client) await superviseTasksOnce(client, { repoRoots, defaultAgent, defaultModel, log });
       lastError = '';
     } catch (err) {
       // Antes se tragaba en silencio: las tareas quedaban "planificadas" sin que nadie supiera por qué.

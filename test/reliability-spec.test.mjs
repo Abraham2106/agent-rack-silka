@@ -105,7 +105,7 @@ test('FR-RL-04: reinicio del hub a mitad de reparación no duplica el send', asy
   assert.equal(launched.state, STATES.TRABAJANDO);
   assert.equal(launched.sessionId, 'sess-rspec-restart');
 
-  await mgr.runAgentTurn('tk-rspec-restart', async () => {});
+  await mgr.runAgentTurn('tk-rspec-restart', async (cwd) => { fs.writeFileSync(path.join(cwd, 'cambio.txt'), 'x'); });
   let row = mgr.list().find((t) => t.id === 'tk-rspec-restart');
   assert.equal(row.state, STATES.REPARANDO);
   assert.ok(row.pendingRepair?.message);

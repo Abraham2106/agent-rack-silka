@@ -63,7 +63,7 @@ test('fallo de setup queda en evidence como kind setup', async () => {
     verify: 'node -e "process.exit(0)"',
     setup: 'node -e "process.exit(2)"',
   }], { manual: true });
-  await mgr.runAgentTurn('setup-fail', async () => {});
+  await mgr.runAgentTurn('setup-fail', async (cwd) => { fs.writeFileSync(path.join(cwd, 'x.txt'), 'x'); });
   const t = mgr.list().find((x) => x.id === 'setup-fail');
   assert.equal(t.state, STATES.VERIFICACION_FALLIDA);
   const setupEv = (t.card?.evidence || []).filter((e) => e.kind === 'setup');
