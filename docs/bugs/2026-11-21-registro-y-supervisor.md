@@ -122,3 +122,53 @@ Silka, arranca agent-rack real en otro puerto con la config efectiva y crea una 
 Un cambio que toque cómo se crean, arrancan o verifican las tareas (worktrees, setup, supervisor, hub, config
 de agent-rack) **no se da por comprobado** con las pruebas de hub falso. Antes de declararlo comprobado hay que
 correr `npm run e2e:worktree`, que crea una sesión de agente real. Si no se corrió, se dice explícitamente.
+
+## Lanzamiento de 9 tareas tras BUG-08 (4 a Cursor `composer-2.5`, 5 a OpenCode `opencode/hy4-flash-free`)
+
+Orden de lo ocurrido, para tenerlo como referencia:
+
+1. Primer lanzamiento (tope de 4 con `scripts/silka-launch.mjs --max 4`): las 9 tareas quedaron en `planificada`.
+   El hub en marcha era anterior a `6d83db5` y seguía rechazando los worktrees por `allowedWorkspaces` (BUG-08).
+   Un hub arrancado antes de un arreglo **no lo toma**: hay que reiniciarlo.
+2. Se descartaron las 9 con `requestDiscard` (sus worktrees y ramas se borraron sin vaciar el `node_modules`
+   del repo principal) y se cerró el hub viejo con el servidor de agent-rack que arrancó. Los `bridge` no se tocan.
+3. Relanzadas con ids nuevos (`-2`) y sin tope de Silka (`--max 9`): 5 arrancaron y 4 no.
+
+### BUG-09 · Una tarea sin cambios y con la sesión caída llegaba a la bandeja como "pass"
+
+**Síntoma:** `ui-escenarios-2`, `iw-escenarios-2`, `rl-escenarios-2` y `tk-escenarios-2` pasaron a
+`lista_para_revision`, riesgo bajo y verify en `pass`, con **0 archivos cambiados**. Las sesiones de OpenCode de
+`rl` y `tk` duraron 9 s y 12 s y terminaron con `exit code 1`.
+
+**Causa (confirmada en parte):** `npm test` pasa sobre un worktree sin tocar, y eso se toma como éxito. No se
+comprueba que haya un diff ni que la sesión del agente terminara bien. De `ui` e `iw` no consta en `hub.log`
+que su sesión llegara a arrancar; no se investigó más.
+
+**Riesgo:** una ficha vacía parece lista para aprobar. Es lo que `reliability` dice evitar (el estado depende de
+evidencia real, no de que el verify no falle). Detectado a mano, mirando `git status` de cada worktree.
+
+**Pendiente (no arreglado):** que una tarea sin diff, o con la sesión terminada en error, no pase a revisión
+(por ejemplo, `verificacion_fallida` o riesgo alto con motivo explícito) y prueba que lo cubra. Las 4 tareas se
+descartaron y se relanzaron (`-3`).
+
+### BUG-10 · Tope de sesiones de agent-rack y reintentos cada ~2 s
+
+**Síntoma:** `agent_session_create: Maximum concurrent sessions limit (5) reached`. Con 9 tareas, 4 esperaron y
+el supervisor reintentó cada ~2 s por tarea; `hub.log` se llenó de líneas iguales durante unos 2 minutos.
+
+**Causa:** el tope de 5 es de agent-rack, no de Silka, y quitar `maxConcurrentTasks` no lo cambia. El supervisor
+no conoce ese tope: lo descubre fallando.
+
+**Pendiente (no arreglado):** que el supervisor respete el tope de sesiones sin reintentar a ciegas (esperar con
+retroceso o contar sesiones vivas) y que no repita el mismo error en el log. Para correr más de 5 a la vez hay
+que subir el límite de agent-rack, decisión del usuario.
+
+### Nota sobre BUG-05
+
+Con un solo hub y el hub ya reiniciado, el lanzamiento de 9 tareas **no** dio `ECONNRESET`. Es una observación
+de un solo intento, no una prueba de que BUG-05 esté resuelto.
+
+### Cómo se enteró uno de que las tareas terminaron
+
+`scripts/silka-launch.mjs` sale en cuanto las tareas arrancan, así que nadie recibe aviso al terminar. El estado
+se mira con `silka task ls` y `silka review ls`. Pendiente decidir si el script debe esperar (`waitAll`).
