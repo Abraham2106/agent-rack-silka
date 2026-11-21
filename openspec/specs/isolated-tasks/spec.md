@@ -6,7 +6,15 @@ Tareas aisladas en git worktree: cada delegación trabaja en su rama y directori
 ## Requirements
 
 ### Requirement: FR-TK-01 Worktree por tarea
-The system SHALL crear la rama `silka/<id>` desde el commit base y el worktree en `.silka/worktrees/<id>` al lanzar; la sesión del agente usa ese directorio de trabajo.
+The system SHALL crear la rama `silka/<id>` desde el commit base y el worktree **fuera del repo**, en `<datos de Silka>/wt/<repo>-<hash>/<id>`, al lanzar; la sesión del agente usa ese directorio de trabajo. Antes de arrancar al agente, el system SHALL correr el setup del worktree (por defecto enlaza `node_modules` si el lockfile coincide con el del repo principal; si no, instala) y guardar su evidencia; si falla, la tarea no arranca y queda en `verificacion_fallida`.
+
+#### Scenario: Worktree fuera del repo (WG-01)
+- **WHEN** se crea el worktree de una tarea
+- **THEN** su ruta no cuelga del repo principal
+
+#### Scenario: Setup antes del agente (WG-05, WG-06)
+- **WHEN** se arranca la sesión del agente
+- **THEN** el setup ya corrió y está en la evidencia; si falló, el agente no arranca
 
 #### Scenario: Tres tareas paralelas (T-TK-01)
 - **WHEN** se lanzan tres tareas en el mismo repositorio
@@ -27,7 +35,11 @@ The system SHALL no iniciar una tarea con `dependsOn` hasta que todas sus depend
 - **THEN** permanece en espera hasta que la dependencia se mezcle
 
 ### Requirement: FR-TK-04 Verify en el worktree
-The system SHALL ejecutar `verify` dentro del worktree al terminar el turno del agente, con tiempo límite y salida guardada por referencia `log:<id>#verify`.
+The system SHALL ejecutar `verify` dentro del worktree al terminar el turno del agente, con tiempo límite y salida guardada por referencia `log:<id>#verify`. El setup solo se repite si cambió la huella de los lockfiles. Un setup fallido reprueba la ficha.
+
+#### Scenario: Setup sin repetir (WG-07)
+- **WHEN** el lockfile no cambió desde el setup inicial
+- **THEN** verify no repite el setup y la evidencia del setup se conserva junto a la del verify
 
 #### Scenario: Verify en paralelo (T-TK-01)
 - **WHEN** terminan turnos de varias tareas
@@ -46,6 +58,17 @@ The system SHALL marcar riesgo alto si falla verify, hay cambios fuera de `scope
 #### Scenario: CI sensible (T-TK-03)
 - **WHEN** la tarea toca `.github/workflows`
 - **THEN** la ficha marca riesgo alto
+
+### Requirement: FR-TK-11 Nunca trabajar en un worktree perdido
+The system SHALL comprobar que el worktree de una tarea sigue siendo un worktree de git válido antes de arrancar al agente, verificar o reanudarlo para reparar; si no lo es, SHALL bloquear la tarea con el motivo y no ejecutar nada (BUG-06). Si una tarea se descarta mientras se crea su sesión, SHALL cancelar esa sesión.
+
+#### Scenario: Worktree perdido (WG-03)
+- **WHEN** el worktree de una tarea pierde su `.git`
+- **THEN** no se verifica, no se escribe nada en el repo principal y la tarea queda bloqueada sin reanudar al agente
+
+#### Scenario: Descarte durante el arranque (WG-04)
+- **WHEN** la tarea se descarta mientras el hub crea su sesión
+- **THEN** esa sesión se cancela y la tarea queda descartada sin sesión
 
 ### Requirement: FR-TK-07 Vida del worktree
 The system SHALL eliminar worktree y rama solo al mezclar o descartar, y nunca mientras la sesión siga viva.

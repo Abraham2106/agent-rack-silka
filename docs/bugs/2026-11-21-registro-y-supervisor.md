@@ -68,11 +68,30 @@ bridge. **Pendiente:** reproducir con un solo hub.
 abierta) sin `.git`. La sesión siguió trabajando ahí; como los worktrees viven *dentro* del repo
 (`.silka/worktrees/`), git subió de carpeta y encontró el repo principal, y el agente escribió en él.
 
-**Pendiente (no arreglado):**
-- Descartar una tarea debe cancelar primero su sesión y solo después quitar el worktree.
-- Llevar los worktrees fuera del árbol del repo (p. ej. `<repo>/../.<repo>-silka/` o `%LOCALAPPDATA%`), para
-  que perder uno nunca caiga en el repo principal. Revisa ADR-0005.
-- Los cambios ajenos quedaron sin commit en el repo principal, a la espera de revisión.
+**Arreglo:**
+- Los worktrees viven **fuera del repo**: `%LOCALAPPDATA%silkawt<repo>-<hash><id>` en Windows,
+  `~/.local/share/silka/wt` en el resto (`src/silka/paths.mjs`, `worktreesBase`). Perder uno ya no cae en el
+  repo principal. Lo mismo para los worktrees temporales de la integración. Enmienda en ADR-0005.
+- `isValidWorktree`: antes de arrancar al agente, verificar o reanudarlo para reparar, Silka comprueba que el
+  worktree siga siendo válido; si no, bloquea la tarea con el motivo y no ejecuta nada (FR-TK-11).
+- Si una tarea se descarta mientras el hub crea su sesión, esa sesión se cancela en el acto.
+- Pruebas WG-01…04. Comprobado en Windows con un worktree real y `node_modules` enlazado.
+
+## BUG-07 · La ficha daba "pass" aunque el setup fallara
+
+**Causa:** la ficha solo miraba la evidencia de verify y accept. Si el setup fallaba, verify ni corría y la ficha
+salía `pass`: "lista para revisión" sin haber probado nada. Además, en verify la evidencia del verify
+**sobrescribía** la del setup en vez de sumarse.
+
+**Arreglo:** un setup fallido reprueba la ficha, y la evidencia de setup y verify se suma (WG-03, WG-07).
+
+## Setup al crear el worktree
+
+Antes, el setup corría solo antes de verify, así que el agente trabajaba sin dependencias. Ahora corre al crear el
+worktree, antes de arrancar al agente (por defecto enlaza `node_modules` si el lockfile coincide con el del repo
+principal; si no, instala). Si falla, el agente no arranca y la tarea queda en `verificacion_fallida` con el
+error en su ficha. Verify solo repite el setup si cambió la huella de los lockfiles (raíz y un nivel, p. ej.
+`sdk/`). Pruebas WG-05…07.
 
 ## Nota sobre el registro
 

@@ -15,9 +15,9 @@ import {
   readTaskStore,
 } from './store.mjs';
 import { activeWorkStates, canTransition, STATES } from './states.mjs';
-import { createTaskWorktree, removeTaskWorktree } from './worktree.mjs';
+import { createTaskWorktree, isValidWorktree, removeTaskWorktree } from './worktree.mjs';
 import { assertVerifyDeclared, runVerifyWithEvidence } from './verify.mjs';
-import { runSetupWithEvidence, setupForTask } from './setup.mjs';
+import { lockfileHash, runSetupWithEvidence, setupForTask } from './setup.mjs';
 import { integrationBlockedReason } from '../integration/runner.mjs';
 
 function nowIso() {
@@ -172,6 +172,17 @@ export class TaskManager {
     const started = [];
     for (const task of pending) {
       try {
+      // BUG-06: nunca se arranca un agente en un worktree perdido (git caería en otro repo).
+      if (!isValidWorktree(task.worktreePath)) {
+        this.blockTask(task.id, `worktree ausente o dañado: ${task.worktreePath}`);
+        log(`[silka] ${task.id} bloqueada: su worktree no es válido.`);
+        continue;
+      }
+      // Setup al crear el worktree, antes del agente: así trabaja con sus dependencias.
+      if (!task.setupDoneAt && !this.prepareWorktree(task.id)) {
+        log(`[silka] ${task.id}: el setup falló; queda en verificacion_fallida.`);
+        continue;
+      }
       const prompt = agentPrompt(task);
       if (!prompt.trim()) throw silkaError('E_POLICY', `La tarea ${task.id} no tiene prompt.`);
       const payload = {
@@ -184,9 +195,14 @@ export class TaskManager {
       const created = parseHubJson(await callHub('agent_session_create', payload));
       const sessionId = String(created.sessionId || '');
       if (!sessionId) throw silkaError('E_HUB', `El hub no devolvió sessionId para ${task.id}.`);
+      let orphan = false;
       mutateTaskStore(this.repoRoot, (store) => {
         const row = store.tasks.find((t) => t.id === task.id);
-        if (!row) return store;
+        // Se descartó (o bloqueó) mientras se creaba la sesión: esa sesión no debe vivir.
+        if (!row || !startable.has(row.state)) {
+          orphan = true;
+          return store;
+        }
         row.sessionId = sessionId;
         row.awaitingHubSession = false;
         row.sessionAlive = true;
@@ -194,6 +210,12 @@ export class TaskManager {
         recordTransition(row, STATES.TRABAJANDO, 'inicio_sesion_hub');
         return store;
       });
+      if (orphan) {
+        log(`[silka] ${task.id} cambió de estado mientras arrancaba; se cancela su sesión ${sessionId}.`);
+        // eslint-disable-next-line no-await-in-loop
+        await callHub('agent_session_cancel', { sessionId }).catch(() => {});
+        continue;
+      }
       started.push(task.id);
       } catch (err) {
         // Una tarea que no arranca no bloquea a las demás; el motivo queda en la tarea.
@@ -207,6 +229,64 @@ export class TaskManager {
       }
     }
     return started;
+  }
+
+  /** Bloquea una tarea con un motivo visible (p. ej. worktree perdido). */
+  blockTask(taskId, reason) {
+    mutateTaskStore(this.repoRoot, (store) => {
+      const row = store.tasks.find((t) => t.id === taskId);
+      if (!row || row.state === STATES.BLOQUEADA || !canTransition(row.state, STATES.BLOQUEADA)) return store;
+      row.blockedReason = reason;
+      row.awaitingHubSession = false;
+      recordTransition(row, STATES.BLOQUEADA, 'worktree_invalido');
+      return store;
+    });
+  }
+
+  /**
+   * Setup del worktree al crearlo, antes de arrancar al agente. Guarda la evidencia y la
+   * huella del lockfile; verify solo lo repite si esa huella cambia. Si falla, la tarea no
+   * arranca: queda en verificacion_fallida con el error íntegro en su ficha.
+   */
+  prepareWorktree(taskId) {
+    const task = getTask(this.repoRoot, taskId);
+    if (!task?.worktreePath) return false;
+    const setupSpec = setupForTask(task, this.repoRoot);
+    const sr = runSetupWithEvidence(this.repoRoot, taskId, task.worktreePath, setupSpec, {
+      timeoutMs: this.verifyTimeoutMs,
+      env: portsEnv(task.allocatedPorts),
+      repoRootForLink: this.repoRoot,
+    });
+    const hash = lockfileHash(task.worktreePath);
+    if (sr.ok) {
+      mutateTaskStore(this.repoRoot, (store) => {
+        const row = store.tasks.find((t) => t.id === taskId);
+        if (!row) return store;
+        row.setupDoneAt = nowIso();
+        row.setupLockHash = hash;
+        row.setupEvidence = sr.items;
+        return store;
+      });
+      return true;
+    }
+    const card = buildDeliveryCard(task, {
+      diff: diffSummary(task.worktreePath, task.baseCommit, { repoRoot: this.repoRoot }),
+      evidence: sr.items,
+      verifyRef: sr.setupRef || null,
+      agentSays: '',
+      verifySource: task.verifySource,
+    });
+    mutateTaskStore(this.repoRoot, (store) => {
+      const row = store.tasks.find((t) => t.id === taskId);
+      if (!row || !canTransition(row.state, STATES.VERIFICACION_FALLIDA)) return store;
+      row.card = card;
+      row.setupEvidence = sr.items;
+      row.awaitingHubSession = false;
+      row.startError = `setup falló: ${(sr.items.find((i) => !i.ok)?.cmd) || 'sin detalle'}`;
+      recordTransition(row, STATES.VERIFICACION_FALLIDA, 'setup_fallido');
+      return store;
+    });
+    return false;
   }
 
   transition(taskId, to, cause) {
@@ -358,7 +438,23 @@ export class TaskManager {
     let verifyRef = writeTaskLog(this.repoRoot, taskId, 'verify', '');
     let allOk = true;
 
-    if (current.worktreePath) {
+    // BUG-06: un worktree perdido nunca se verifica (los comandos correrían en otro repo).
+    const worktreeOk = isValidWorktree(current.worktreePath);
+    if (!worktreeOk) {
+      evidence.push({
+        kind: 'setup',
+        ok: false,
+        cmd: '(comprobación del worktree)',
+        detail: `worktree ausente o dañado: ${current.worktreePath}; no se verifica fuera de él`,
+        exitCode: null,
+        durationMs: 0,
+        ref: null,
+      });
+      allOk = false;
+    } else if (current.setupDoneAt && current.setupLockHash === lockfileHash(current.worktreePath)) {
+      // Setup hecho al crear el worktree y el lockfile no cambió: no se repite.
+      evidence.push({ kind: 'setup', ok: true, cmd: '(setup al crear el worktree; lockfile sin cambios)', exitCode: 0, durationMs: 0, ref: null });
+    } else {
       const setupSpec = setupForTask(current, this.repoRoot);
       const sr = runSetupWithEvidence(this.repoRoot, taskId, current.worktreePath, setupSpec, {
         timeoutMs: this.verifyTimeoutMs,
@@ -374,7 +470,8 @@ export class TaskManager {
         timeoutMs: this.verifyTimeoutMs,
         env,
       });
-      evidence = vr.items;
+      // Se suma a la del setup (antes la sobrescribía y la ficha perdía el setup).
+      evidence = evidence.concat(vr.items);
       verifyRef = vr.verifyRef;
       allOk = vr.ok;
     }
@@ -386,7 +483,10 @@ export class TaskManager {
       evidence = evidence.concat(ar.items);
       allOk = allOk && ar.ok;
     }
-    const diff = diffSummary(current.worktreePath, current.baseCommit, { repoRoot: this.repoRoot });
+    // Sin worktree válido, git correría en otro repo: diff vacío.
+    const diff = worktreeOk
+      ? diffSummary(current.worktreePath, current.baseCommit, { repoRoot: this.repoRoot })
+      : { files: [], added: 0, removed: 0, statText: '' };
     const card = buildDeliveryCard(current, {
       diff,
       evidence,
@@ -440,6 +540,11 @@ export class TaskManager {
       const pr = task.pendingRepair;
       if (!pr?.message || !task.sessionId) continue;
       if (task.repairDispatchId === pr.id) continue;
+      // BUG-06: sin worktree válido, reanudar al agente lo dejaría trabajando en otro repo.
+      if (!isValidWorktree(task.worktreePath)) {
+        this.blockTask(task.id, `worktree ausente o dañado: ${task.worktreePath}`);
+        continue;
+      }
       // eslint-disable-next-line no-await-in-loop
       await callHub('agent_session_send', { sessionId: task.sessionId, message: pr.message });
       mutateTaskStore(this.repoRoot, (store) => {
@@ -537,7 +642,7 @@ export class TaskManager {
     const task = getTask(this.repoRoot, taskId);
     if (!task || task.sessionAlive) return;
     releasePorts(this.repoRoot, taskId);
-    if (task.worktreePath) removeTaskWorktree(this.repoRoot, taskId);
+    if (task.worktreePath) removeTaskWorktree(this.repoRoot, taskId, task.worktreePath);
     mutateTaskStore(this.repoRoot, (store) => {
       const row = store.tasks.find((t) => t.id === taskId);
       if (row) {

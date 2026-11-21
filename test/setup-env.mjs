@@ -8,3 +8,7 @@ import path from 'node:path';
 if (!process.env.SILKA_CONFIG_DIR) {
   process.env.SILKA_CONFIG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'silka-test-config-'));
 }
+if (!process.env.SILKA_DATA_DIR) {
+  // Los worktrees viven fuera del repo (BUG-06); en pruebas, en un temporal propio.
+  process.env.SILKA_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'silka-test-data-'));
+}

@@ -28,9 +28,10 @@ test('RR-03 una tarea descartada nunca arranca sesión aunque siga marcada como 
   const { createTaskManager } = await import('../src/silka/tasks/manager.mjs');
   const { mutateTaskStore } = await import('../src/silka/tasks/store.mjs');
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'silka-desc-'));
+  fs.mkdirSync(path.join(repo, '.git'));
   const mgr = createTaskManager(repo);
   mutateTaskStore(repo, (store) => {
-    store.tasks.push({ id: 'tk-viva', state: 'planificada', awaitingHubSession: true, worktreePath: repo, title: 'viva', prompt: 'x', transitions: [] });
+    store.tasks.push({ id: 'tk-viva', state: 'planificada', awaitingHubSession: true, worktreePath: repo, setupDoneAt: 'x', title: 'viva', prompt: 'x', transitions: [] });
     store.tasks.push({ id: 'tk-muerta', state: 'descartada', awaitingHubSession: true, worktreePath: repo, title: 'muerta', prompt: 'x', transitions: [] });
     return store;
   });

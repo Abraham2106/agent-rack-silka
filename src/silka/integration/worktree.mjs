@@ -1,10 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { worktreesBase } from '../paths.mjs';
 import { gitRun } from '../tasks/git.mjs';
 import { prepareWorktreeRemoval } from '../tasks/worktree-cleanup.mjs';
 
+// Fuera del repo, igual que los worktrees de tarea (BUG-06).
 function intWorktreePath(repoRoot, tag) {
-  return path.join(repoRoot, '.silka', 'worktrees', `_int-${tag}`);
+  return path.join(worktreesBase(repoRoot), `_int-${tag}`);
 }
 
 export function withDetachedWorktree(repoRoot, commitSha, fn, { tag = 'run' } = {}) {

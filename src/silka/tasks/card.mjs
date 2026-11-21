@@ -17,7 +17,10 @@ export function buildDeliveryCard(task, {
   const acceptItems = list.filter((e) => e.kind === 'accept');
   const verifyOk = verifyItems.length ? verifyItems.every((e) => e.ok) : true;
   const acceptOk = acceptItems.length ? acceptItems.every((e) => e.ok) : true;
-  const allOk = verifyOk && acceptOk;
+  // Un setup fallido también reprueba: antes la ficha salía "pass" sin haber verificado nada,
+  // porque el verify ni se corría y solo se miraban verify y accept.
+  const setupOk = list.filter((e) => e.kind === 'setup').every((e) => e.ok);
+  const allOk = setupOk && verifyOk && acceptOk;
   const risk = assessRisk({
     verifyOk: allOk,
     files: diff?.files,
