@@ -117,6 +117,14 @@ ${agent}  (${cat.models.length}${cat.total > cat.models.length ? ` de ${cat.tota
     printHelp();
     throw new Error(`Comando desconocido: ${cmd}`);
   }
+  // ui y run no deberían pedirte abrir otra terminal: si no hay hub, lo levantan en segundo plano.
+  if (cmd === 'ui' || cmd === 'run') {
+    const { ensureHub, hubStatus } = await import('./hub.mjs');
+    if (!hubStatus().alive) {
+      process.stderr.write('Arrancando el hub en segundo plano…\n');
+      await ensureHub();
+    }
+  }
   await withClient(async (client, status) => {
     if (cmd === 'ls') return listSessionsCommand(client, status.port);
     if (cmd === 'run') return runSession(client, status, argv.slice(1));
