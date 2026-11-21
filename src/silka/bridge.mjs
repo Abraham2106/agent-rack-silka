@@ -285,7 +285,11 @@ export async function startBridge() {
     const from = callerFrom(server.getClientVersion());
     const manager = isManager(from);
     if (!visibleToolNames([name], { depth: currentDepth(), manager }).includes(name)) {
-      return { content: [{ type: 'text', text: depthBlockMessage() }], isError: true };
+      // El mensaje dice la razón real: herramienta solo del manager o tope de profundidad.
+      const text = name === 'silka_notes' && !manager
+        ? 'silka_notes es solo para el manager (claude o tú), no para sub-agentes.'
+        : depthBlockMessage();
+      return { content: [{ type: 'text', text }], isError: true };
     }
     if (name === 'silka_notes') {
       if (!manager) return { content: [{ type: 'text', text: 'silka_notes es solo para el manager.' }], isError: true };

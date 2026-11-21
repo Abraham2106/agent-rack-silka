@@ -65,3 +65,17 @@ test('no atribuye archivos que ya cambiaban; con otra tarea activa queda ambiguo
   assert.deepEqual(shared.files, []);
   assert.deepEqual(shared.ambiguous, ['nuevo.txt']);
 });
+
+test('una tarea running cuyo shim murió se cierra como cancelled', async () => {
+  const { reapDeadTasks } = await import('../src/silka/state.mjs');
+  const tasks = [
+    { id: 'a', status: 'running', pid: 111 },
+    { id: 'b', status: 'running', pid: 222 },
+    { id: 'c', status: 'running' },
+  ];
+  reapDeadTasks(tasks, (pid) => pid === 222 || pid === undefined);
+  assert.equal(tasks[0].status, 'cancelled');
+  assert.ok(tasks[0].finishedAt);
+  assert.equal(tasks[1].status, 'running');
+  assert.equal(tasks[2].status, 'running');
+});

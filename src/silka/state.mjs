@@ -32,12 +32,29 @@ function emptyStore() {
   return { tasks: [], conflicts: [] };
 }
 
+function pidAlive(pid) {
+  const id = Number(pid);
+  if (!Number.isInteger(id) || id <= 0) return true; // tareas viejas sin pid: no se tocan
+  try { process.kill(id, 0); return true; } catch (err) { return err?.code === 'EPERM'; }
+}
+
+/** Una tarea 'running' cuyo shim ya no existe (cancelada o muerta) se cierra como 'cancelled'. */
+export function reapDeadTasks(tasks, alive = pidAlive) {
+  for (const task of tasks) {
+    if (task?.status === 'running' && !alive(task.pid)) {
+      task.status = 'cancelled';
+      task.finishedAt = task.finishedAt || new Date().toISOString();
+    }
+  }
+  return tasks;
+}
+
 export function readStore(workspace) {
   try {
     const parsed = JSON.parse(fs.readFileSync(tasksFile(workspace), 'utf8'));
     if (!parsed || typeof parsed !== 'object') return emptyStore();
     return {
-      tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [],
+      tasks: Array.isArray(parsed.tasks) ? reapDeadTasks(parsed.tasks) : [],
       conflicts: Array.isArray(parsed.conflicts) ? parsed.conflicts : [],
     };
   } catch {
@@ -238,6 +255,7 @@ export function beginTurn({ workspace, agent, from, prompt }) {
     startedAt: new Date().toISOString(),
     finishedAt: null,
     status: 'running',
+    pid: process.pid,
     files: [],
     ambiguous: [],
     summary: oneLine(prompt, 80),

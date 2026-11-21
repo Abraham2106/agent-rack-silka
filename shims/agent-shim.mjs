@@ -28,7 +28,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readSilkaMark } from '../src/silka/mark.mjs';
 import { silkaConfigDir } from '../src/silka/paths.mjs';
-import { signalProcessTree } from '../src/silka/proc.mjs';
+import { signalProcessTree, trackDescendants, killTracked } from '../src/silka/proc.mjs';
 import { beginTurn, finishTurn, oneLine } from '../src/silka/state.mjs';
 
 export { readSilkaMark };
@@ -691,10 +691,17 @@ function writeLog(spec, code, out, err) {
   } catch { /* el log es opcional */ }
 }
 
+const trackers = new WeakMap();
+function trackerFor(child) {
+  if (!trackers.has(child)) trackers.set(child, trackDescendants(child.pid));
+  return trackers.get(child);
+}
+
 function listenStop(child) {
+  trackerFor(child);
   const stop = () => {
     signalProcessTree(child.pid);
-    const force = setTimeout(() => signalProcessTree(child.pid, { force: true }), 2000);
+    const force = setTimeout(() => { signalProcessTree(child.pid, { force: true }); killTracked(trackerFor(child)); }, 2000);
     force.unref?.();
   };
   process.on('SIGINT', stop);
@@ -710,6 +717,7 @@ function whenAgentExits(child, after) {
     armed = true;
     setTimeout(() => {
       signalProcessTree(child.pid, { force: true });
+      killTracked(trackerFor(child)); // huérfanos de `start /b` que taskkill /T ya no ve
       setTimeout(() => after(code ?? 1), 50);
     }, 400);
   };
