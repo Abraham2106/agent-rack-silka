@@ -9,10 +9,25 @@ import { isBusy } from './format.mjs';
 import { ensureHub, loadSilkaConfig } from './hub.mjs';
 import { stampPrompt } from './mark.mjs';
 import { unreadNotes } from './notes.mjs';
+import { matchSession, sendToSession } from './commands.mjs';
 import { originLabel, readOrigins, rememberOrigin } from './origin.mjs';
 import { appendDecision, formatBlock, formatChanges, formatDecisions, samePath } from './state.mjs';
 
 const READ_ONLY_AT_MAX = new Set(['silka_state', 'silka_changes', 'silka_decisions']);
+
+const SEND_TOOL = {
+  name: 'silka_send',
+  description: 'Encola un mensaje para una sesión. Con now:true interrumpe el turno y lo entrega ya, en la misma conversación. El autor queda como quien llama (claude, si llama el manager).',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      sessionId: { type: 'string', description: 'Id de la sesión. Acepta un id corto.' },
+      text: { type: 'string', description: 'Lo que el agente debe tener en cuenta.' },
+      now: { type: 'boolean', description: 'true interrumpe y retoma ya. Sin ahora, el mensaje espera al fin del turno.' },
+    },
+    required: ['sessionId', 'text'],
+  },
+};
 
 const NOTES_TOOL = {
   name: 'silka_notes',
@@ -123,6 +138,23 @@ export function isDelegatingTool(name) {
     || name === 'agent_session_create'
     || name === 'agent_review'
     || /_run$/.test(name);
+}
+
+/** El manager habla con cualquiera. Un sub-agente solo con las sesiones que él abrió. */
+export function canSilkaSend({ from, manager, session, origins = {} }) {
+  if (!session?.sessionId) return false;
+  if (manager && isManager(from)) return true;
+  const caller = originLabel(from);
+  if (!caller || caller === 'tú' || caller === 'claude') return false;
+  const origin = origins[session.sessionId];
+  return Boolean(origin && originLabel(origin.from) === caller);
+}
+
+export function performSilkaSend({ from, manager, session, origins, text, now }) {
+  if (!canSilkaSend({ from, manager, session, origins })) {
+    throw new Error('silka_send no puede usarse sobre sesiones ajenas.');
+  }
+  return sendToSession(session, { text, author: originLabel(from), now: now === true });
 }
 
 export function isManager(from) {
@@ -259,6 +291,7 @@ export async function startBridge() {
   const tools = [
     ...hubTools.filter((tool) => tool.name !== 'silka_notes' && !tool.name.startsWith('silka_')),
     NOTES_TOOL,
+    SEND_TOOL,
     ...STATE_TOOLS,
   ];
 
@@ -296,6 +329,24 @@ export async function startBridge() {
       const markRead = args.markRead !== false;
       const notes = unreadNotes({ sessionId: args.sessionId, markRead });
       return { content: [{ type: 'text', text: JSON.stringify(notes) }] };
+    }
+    if (name === 'silka_send') {
+      try {
+        const sessions = await hubSessions(hub);
+        const session = matchSession(sessions, String(args.sessionId || ''));
+        const result = performSilkaSend({
+          from,
+          manager,
+          session,
+          origins: readOrigins(),
+          text: args.text,
+          now: args.now === true,
+        });
+        const line = result.interrupted ? `enviado ya ${result.item.id}` : `en cola ${result.item.id}`;
+        return textResult(line);
+      } catch (err) {
+        return textResult(err instanceof Error ? err.message : String(err), true);
+      }
     }
     let sessions = [];
     let listed = false;

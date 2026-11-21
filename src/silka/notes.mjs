@@ -32,7 +32,7 @@ function writeNotes(notes) {
   writeAtomic(notesFile(), body ? `${body}\n` : '');
 }
 
-export function appendNote({ sessionId, text }) {
+export function appendNote({ sessionId, text, kind, workspace }) {
   const note = {
     id: crypto.randomUUID(),
     sessionId: String(sessionId),
@@ -40,6 +40,8 @@ export function appendNote({ sessionId, text }) {
     at: new Date().toISOString(),
     read: false,
   };
+  if (kind) note.kind = String(kind);
+  if (workspace) note.workspace = String(workspace);
   return withFileLock(notesLock(), () => {
     const notes = readNotes();
     notes.push(note);
@@ -64,6 +66,23 @@ export function unreadNotes({ sessionId, markRead = true } = {}) {
       writeNotes(notes.map((note) => (ids.has(note.id) ? { ...note, read: true } : note)));
     }
     return pending;
+  });
+}
+
+function sameWorkspace(a, b) {
+  if (!a || !b) return false;
+  const norm = (value) => path.resolve(String(value)).replaceAll('\\', '/').replace(/\/$/, '').toLowerCase();
+  return norm(a) === norm(b);
+}
+
+/** Inserciones del usuario en un workspace, las más nuevas al final. */
+export function recentInsertions(workspace, sinceMs = 2 * 60 * 60 * 1000) {
+  const cutoff = Date.now() - sinceMs;
+  return readNotes().filter((note) => {
+    if (note.kind !== 'insertion' || !note.workspace) return false;
+    if (workspace && !sameWorkspace(note.workspace, workspace)) return false;
+    const at = Date.parse(note.at);
+    return Number.isFinite(at) && at >= cutoff;
   });
 }
 

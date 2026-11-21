@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { graphHint } from './graph.mjs';
 import { withFileLock, writeAtomic } from './lock.mjs';
-import { appendNote } from './notes.mjs';
+import { appendNote, recentInsertions } from './notes.mjs';
 import { originLabel } from './origin.mjs';
 
 const TWO_HOURS = 2 * 60 * 60 * 1000;
@@ -214,6 +214,7 @@ export function formatBlock(workspace, { excludeId } = {}) {
     .sort((a, b) => String(b.finishedAt).localeCompare(String(a.finishedAt)));
   const active = tasks.filter((task) => task.status === 'running' && task.id !== excludeId);
   const decisions = readDecisions(workspace).slice(-3).reverse();
+  const inserts = recentInsertions(workspace).slice(-3);
   const graph = graphHint(workspace);
   const lines = [HEADER];
   lines.push(repo
@@ -224,6 +225,7 @@ export function formatBlock(workspace, { excludeId } = {}) {
     const files = fileList(taskFiles(task));
     tail.push(`en curso: ${task.agent}${files ? ` [${files}]` : ''}`);
   }
+  for (const note of inserts) tail.push(oneLine(note.text, 90));
   for (const decision of decisions.slice(0, 3)) tail.push(`decisión: ${oneLine(decision.text, 72)}`);
   if (graph) tail.push(graph);
   const room = Math.max(0, 15 - lines.length - tail.length);

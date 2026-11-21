@@ -234,6 +234,11 @@ export function createTurnLog({ turnId, workspace, agent, author, prompt, listSe
       ctx.lastAgent = clean;
       writeEvent(ctx, { kind: 'agent', author: ctx.agent, text: clean });
     },
+    interrupt(text) {
+      if (!turnId) return;
+      writeEvent(ctx, { kind: 'interrupt', author: 'tú', text: text || 'interrumpido por el usuario' });
+      kick();
+    },
     conversation(kind, id) {
       if (!turnId || !id || ctx.conversationId === id) return;
       ctx.conversationId = String(id);

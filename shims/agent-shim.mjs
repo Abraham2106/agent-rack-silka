@@ -26,6 +26,15 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  clearInterrupt,
+  codexToolPhase,
+  createToolGate,
+  cursorToolPhase,
+  holdForCurrentTool,
+  interruptPath,
+  opencodeToolPhase,
+} from '../src/silka/interrupt.mjs';
 import { readSilkaMark } from '../src/silka/mark.mjs';
 import { silkaConfigDir } from '../src/silka/paths.mjs';
 import { signalProcessTree, trackDescendants, killTracked } from '../src/silka/proc.mjs';
@@ -61,6 +70,12 @@ export function parseShimArgs(argv) {
 let opts = {};
 let prompt = '';
 let target = '';
+let userStop = false;
+
+/** La espera que usa el canal de interrupción: suelta la herramienta, con tope. */
+export function waitOutTool(gate, timeoutMs) {
+  return holdForCurrentTool(gate, timeoutMs);
+}
 
 function silkaChildEnv(agent, rawPrompt) {
   const mark = readSilkaMark(rawPrompt);
@@ -572,13 +587,31 @@ function cursorSpec() {
 // agent-rack ya parsea el JSONL de `codex exec --json`. Solo resolvemos el binario y
 // reordenamos `resume exec ...` -> `exec resume ...` (así arma agent-rack el resume
 // cuando el primer arg configurado es este script).
+/** `exec resume` de este Codex no acepta `--sandbox`; el hilo ya trae el suyo. */
+export function normalizeCodexArgs(argv) {
+  const args = argv[0] === 'resume' && argv[1] === 'exec' ? ['exec', 'resume', ...argv.slice(2)] : [...argv];
+  if (args[0] !== 'exec' || args[1] !== 'resume') return args;
+  // `exec resume` rechaza --sandbox, pero acepta -c. Lo traducimos para que el turno
+  // reanudado conserve el mismo sandbox y no corra con el del config.toml del usuario.
+  const next = [];
+  for (let i = 0; i < args.length; i += 1) {
+    let mode;
+    if (args[i] === '--sandbox') { mode = args[i + 1]; i += 1; }
+    else if (String(args[i] || '').startsWith('--sandbox=')) mode = String(args[i]).slice('--sandbox='.length);
+    if (mode !== undefined) { if (mode) next.push('-c', `sandbox_mode="${mode}"`); continue; }
+    next.push(args[i]);
+  }
+  return next;
+}
+
 function runCodex(argv) {
   const l = resolve('codex', 'CODEX_BIN');
   if (!l) { process.stderr.write('No encontré Codex en el PATH (npm i -g @openai/codex o define CODEX_BIN).\n'); process.exit(127); }
-  const args = argv[0] === 'resume' && argv[1] === 'exec' ? ['exec', 'resume', ...argv.slice(2)] : [...argv];
+  const args = normalizeCodexArgs(argv);
   const rawPrompt = args.at(-1) ?? '';
   const turned = attachTurn('codex', rawPrompt);
   turnLog = openTurnLog('codex', turned);
+  const gate = createToolGate();
   if (args.length) args[args.length - 1] = turned.prompt;
   const child = spawn(l.cmd, [...l.pre, ...args], {
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -599,6 +632,7 @@ function runCodex(argv) {
       err += `${step}\n`;
       return;
     }
+    gate.observe(codexToolPhase(data));
     if (String(data.type || '') === 'error') {
       const model = modelFromArgs(args);
       const current = typeof data.message === 'string' ? data.message : '';
@@ -647,9 +681,15 @@ function runCodex(argv) {
       if (step) process.stderr.write(`${step}\n`);
     }
   });
-  listenStop(child);
+  listenStop(child, gate);
   child.on('error', (e) => { process.stderr.write(`No pude iniciar codex: ${e.message}\n`); process.exit(127); });
   whenAgentExits(child, (code) => {
+    if (userStop) {
+      closeTurn(turned.turnId, 'done', 'interrumpido por el usuario');
+      try { turnLog.interrupt('interrumpido por el usuario'); } catch { /* el historial no frena la salida */ }
+      Promise.resolve(turnLog.finish('interrumpido por el usuario')).finally(() => process.exit(0));
+      return;
+    }
     if (buf.trim()) take(buf);
     if (held.final) {
       process.stdout.write(`${held.final}\n`);
@@ -737,8 +777,39 @@ function trackerFor(child) {
   return trackers.get(child);
 }
 
-function listenStop(child) {
+function watchInterrupt(child, gate) {
+  let stopped = false;
+  const timer = setInterval(() => {
+    if (stopped || userStop) return;
+    try {
+      if (!fs.existsSync(interruptPath(process.pid))) return;
+    } catch {
+      return;
+    }
+    stopped = true;
+    clearInterval(timer);
+    Promise.resolve(waitOutTool(gate)).finally(() => {
+      clearInterrupt(process.pid);
+      if (child.exitCode != null || child.signalCode != null) return;
+      userStop = true;
+      signalProcessTree(child.pid);
+      const force = setTimeout(() => {
+        signalProcessTree(child.pid, { force: true });
+        killTracked(trackerFor(child));
+      }, 2000);
+      force.unref?.();
+    });
+  }, 200);
+  timer.unref?.();
+  child.on('exit', () => {
+    stopped = true;
+    clearInterval(timer);
+  });
+}
+
+function listenStop(child, gate) {
   trackerFor(child);
+  if (gate) watchInterrupt(child, gate);
   const stop = () => {
     signalProcessTree(child.pid);
     const force = setTimeout(() => { signalProcessTree(child.pid, { force: true }); killTracked(trackerFor(child)); }, 2000);
@@ -775,6 +846,7 @@ function publish(state, lines) {
 
 function runTranslated(spec) {
   turnLog = openTurnLog(spec.kind, spec);
+  const gate = createToolGate();
   const child = spawn(spec.cmd, spec.args, {
     cwd: process.cwd(),
     env: { ...process.env, ...(spec.env || {}) },
@@ -797,6 +869,7 @@ function runTranslated(spec) {
     if (!line.trim()) return;
     let ev;
     try { ev = JSON.parse(line); } catch { return; }
+    gate.observe(spec.kind === 'cursor' ? cursorToolPhase(ev) : opencodeToolPhase(ev));
     const lines = spec.kind === 'cursor' ? onCursorEvent(ev, state) : onOpencodeEvent(ev, state);
     publish(state, lines);
     for (const line of lines) noteActivity(line);
@@ -816,9 +889,18 @@ function runTranslated(spec) {
   });
   // El stderr del CLI no se reenvía: el nuestro es solo la actividad corta.
   child.stderr.on('data', (chunk) => { err += chunk.toString('utf8'); });
-  listenStop(child);
+  listenStop(child, gate);
   child.on('error', (e) => fail(`No pude iniciar ${target}: ${e.message}`));
   whenAgentExits(child, (code) => {
+    if (userStop) {
+      clearTimeout(pause);
+      closeTurn(spec.turnId, 'done', 'interrumpido por el usuario');
+      try { turnLog.interrupt('interrumpido por el usuario'); } catch { /* el historial no frena la salida */ }
+      Promise.resolve(turnLog.finish('interrumpido por el usuario')).finally(() => {
+        emit({ is_error: false, result: 'interrumpido por el usuario', session_id: state.session_id }, 0);
+      });
+      return;
+    }
     clearTimeout(pause);
     if (buf.trim()) feed(buf);
     clearTimeout(pause);

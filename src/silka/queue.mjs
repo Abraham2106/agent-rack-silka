@@ -55,7 +55,10 @@ function withQueue(sessionId, fn) {
   });
 }
 
-export function enqueueMessage(sessionId, { author = 'tú', text, id } = {}) {
+export const PRIORITY_LEAD = 'Mensaje del usuario (tiene prioridad sobre instrucciones anteriores):';
+export const PRIORITY_TAIL = 'Revisa el estado de los archivos antes de seguir; continúa desde donde ibas sin rehacer lo que ya está bien.';
+
+export function enqueueMessage(sessionId, { author = 'tú', text, id, now = false } = {}) {
   const body = String(text ?? '').trim();
   if (!body) throw new Error('El mensaje está vacío.');
   const item = {
@@ -64,6 +67,7 @@ export function enqueueMessage(sessionId, { author = 'tú', text, id } = {}) {
     text: body,
     at: new Date().toISOString(),
     status: 'pending',
+    now: Boolean(now),
   };
   return withQueue(sessionId, (queue) => {
     if (queue.delivered.includes(item.id) || queue.messages.some((message) => message.id === item.id)) return item;
@@ -79,6 +83,15 @@ export function listQueue(sessionId) {
   } catch {
     return [];
   }
+}
+
+export function setQueuedNow(sessionId, messageId, now = true) {
+  return withQueue(sessionId, (queue) => {
+    const message = queue.messages.find((item) => item.id === messageId && item.status === 'pending');
+    if (!message) return null;
+    message.now = Boolean(now);
+    return { ...message };
+  });
 }
 
 export function removeQueued(sessionId, messageId) {
@@ -104,6 +117,19 @@ export function formatQueueDelivery(messages) {
     .map((message) => `${message.author || 'tú'}: ${String(message.text ?? '').trim()}`)
     .filter((line) => line.length > 2)
     .join('\n\n');
+}
+
+/** "Enviar ya" manda ese mensaje y el resto de la cola, en un solo turno. */
+export function formatDelivery(messages) {
+  const list = messages || [];
+  if (!list.some((message) => message.now)) return formatQueueDelivery(list);
+  const priority = list
+    .filter((message) => message.now)
+    .map((message) => String(message.text ?? '').trim())
+    .filter(Boolean)
+    .join('\n\n');
+  const rest = formatQueueDelivery(list.filter((message) => !message.now));
+  return [`${PRIORITY_LEAD} ${priority}`.trim(), rest, PRIORITY_TAIL].filter((part) => part && String(part).trim()).join('\n\n');
 }
 
 /**

@@ -1,5 +1,13 @@
 import { clip, formatDuration, originLabel, shortId, statusColor, statusIcon } from '../format.mjs';
 
+export function interruptCount(events) {
+  return (events || []).filter((event) => event.kind === 'interrupt').length;
+}
+
+function sentNow(event) {
+  return Boolean(event?.now) || String(event?.text || '').includes('tiene prioridad sobre instrucciones anteriores');
+}
+
 export function agentPhase(status, events) {
   if (status === 'running' || status === 'cancelling') {
     const last = [...(events || [])].reverse().find((event) => event.kind === 'tool' || event.kind === 'agent');
@@ -33,8 +41,15 @@ export function buildChatRows(events, queued, query) {
       rows.push({ key: event.id, kind: 'tool', text, detail, toolId: event.id });
       continue;
     }
+    if (event.kind === 'interrupt') {
+      const text = `⚡ ${String(event.text || 'interrumpido por el usuario').replace(/\s+/g, ' ').trim()}`;
+      if (!keep(text)) continue;
+      rows.push({ key: event.id, kind: 'rule', text });
+      continue;
+    }
     if (event.kind === 'user' || event.kind === 'agent') {
-      const text = `${event.author || 'tú'}  ${String(event.text || '').replace(/\s+/g, ' ').trim()}`;
+      const mark = event.kind === 'user' && sentNow(event) ? '  ⚡' : '';
+      const text = `${event.author || 'tú'}  ${String(event.text || '').replace(/\s+/g, ' ').trim()}${mark}`;
       if (!keep(text)) continue;
       rows.push({ key: event.id, kind: 'message', text, author: event.author });
     }
@@ -43,7 +58,8 @@ export function buildChatRows(events, queued, query) {
   const pending = queued || [];
   if (!pending.length) rows.push({ key: 'queue-empty', kind: 'queue', text: 'vacía' });
   for (const item of pending) {
-    const text = `${item.author || 'tú'}  ${String(item.text || '').replace(/\s+/g, ' ').trim()}  ⏳`;
+    const mark = item.now ? '⚡' : '⏳';
+    const text = `${item.author || 'tú'}  ${String(item.text || '').replace(/\s+/g, ' ').trim()}  ${mark}`;
     if (!keep(text)) continue;
     rows.push({ key: item.id, kind: 'queue', text });
   }
@@ -75,15 +91,16 @@ export function visibleChatRows(rows, { height, focus, pinned }) {
 }
 
 export function renderChat(h, Box, Text, {
-  session, meta, origins, models, events, queued, width, height, query, expanded, focus, pinned,
+  session, meta, origins, models, events, queued, width, height, query, expanded, focus, pinned, selectedQueueId,
 }) {
   const inner = Math.max(8, width - 4);
   const info = session ? (meta[session.sessionId] || {}) : null;
   const model = session ? (info.model || models[session.agentId] || '') : '';
   const origin = session ? originLabel(origins[session.sessionId]) : '';
   const phase = session ? agentPhase(session.status, events) : '';
+  const stops = session ? interruptCount(events) : 0;
   const header = session
-    ? `${statusIcon(session.status)} ${session.agentId} · ${model || 'sin modelo'} · por ${origin} · ${formatDuration(session)}  ${phase}`
+    ? `${statusIcon(session.status)} ${session.agentId} · ${model || 'sin modelo'} · por ${origin} · ${formatDuration(session)}  ${phase}  · ${stops} interrupciones`
     : 'Chat';
   const headH = 2;
   const rows = flattenChatRows(buildChatRows(events, queued, query), expanded);
@@ -96,7 +113,7 @@ export function renderChat(h, Box, Text, {
     return h(Text, {
       key: row.key,
       color: active ? statusColor(session?.status) : color,
-      inverse: active && (row.kind === 'tool' || row.kind === 'detail'),
+      inverse: row.key === selectedQueueId || (active && (row.kind === 'tool' || row.kind === 'detail')),
       dimColor: row.kind === 'rule' || row.kind === 'detail' || (row.kind === 'queue' && row.text === 'vacía'),
       wrap: 'truncate',
     }, line || ' ');

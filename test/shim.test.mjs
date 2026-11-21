@@ -7,11 +7,19 @@ import {
   cursorLaunchArgs,
   finishCursor,
   finishOpencode,
+  normalizeCodexArgs,
   parseShimArgs,
   redactSecrets,
 } from '../shims/agent-shim.mjs';
 
 const secret = 'a'.repeat(32);
+
+test('exec resume conserva el sandbox vía -c (rechaza --sandbox)', () => {
+  const args = normalizeCodexArgs(['resume', 'exec', '--json', '--sandbox', 'workspace-write', '--model', 'gpt', 'thread', 'sigue']);
+  assert.deepEqual(args, ['exec', 'resume', '--json', '-c', 'sandbox_mode="workspace-write"', '--model', 'gpt', 'thread', 'sigue']);
+  assert.equal(args.includes('--sandbox'), false);
+  assert.deepEqual(normalizeCodexArgs(['exec', '--json', '--sandbox', 'workspace-write', 'hola']).slice(0, 4), ['exec', '--json', '--sandbox', 'workspace-write']);
+});
 
 test('parseShimArgs lee modelo y permission-mode', () => {
   const parsed = parseShimArgs(['--permission-mode', 'plan', '--model=grok', 'haz esto']);

@@ -1,14 +1,17 @@
 export function helpLines() {
   return [
-    '↑↓        elegir sesión (↑ edita el último en cola si hay uno)',
+    '↑↓        elegir sesión. Con la caja vacía, ↑ elige un mensaje en cola',
     'enter     encola el mensaje; sobre una herramienta, la abre',
-    'esc       borra el último en cola, o lo que estás editando',
+    'ctrl+enter  envía ya: interrumpe y retoma esta conversación',
+    'alt+enter   igual que ctrl+enter (siempre activo)',
+    'sobre la cola  ctrl+enter o alt+enter lo saca y lo envía ya',
+    'esc       borra el mensaje en cola elegido, o lo que estás escribiendo',
     'ctrl+b    oculta la lista y deja el chat a pantalla completa',
     '/         busca en el chat',
     'pgup/dn   sube o baja en el chat (deja de seguir el final)',
     'n         nueva sesión: agente, modelo opcional, prompt',
     '          en el prompt, enter es otra línea y Ctrl+S envía',
-    'i         redirigir: cancela y sigue con una instrucción nueva',
+    'i         recuerda: ctrl+enter o alt+enter envían ya',
     'm         nota para el manager (silka_notes)',
     'e         estado del workspace: rama, tareas, conflictos, decisiones',
     'c         cancelar, pide confirmación',
@@ -17,7 +20,8 @@ export function helpLines() {
     'Q en la lista: hay mensajes en cola.  N: hay notas sin leer.  !: conflicto de archivos.',
     '↳ une la sesión nueva con la que redirigiste, o una hija bajo quien la lanzó.',
     'El origen (tú, claude-code, codex…) dice quién abrió la sesión.',
-    'Alt+Enter será enviar ya. En esta parte Enter solo encola.',
+    '⚡ es un mensaje enviado ya. ⏳ sigue en cola. Cada interrupción reanuda y gasta tokens.',
+    'PgUp/PgDn, Inicio/Fin y la rueda mueven el chat. Se sigue el final hasta que subes.',
   ];
 }
 

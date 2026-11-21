@@ -8,9 +8,9 @@ function printHelp() {
   silka hub
   silka ls
   silka run <agente> "<prompt>" [--model m] [--workspace dir]
-  silka send <id> "<mensaje>"
+  silka send <id> "<mensaje>" [--now]
   silka queue <id> [--clear]
-  silka steer <id> "<instrucción>"
+  silka steer <id> "<mensaje>"   (alias de send --now)
   silka note <id> "<texto>"
   silka ui
   silka mcp

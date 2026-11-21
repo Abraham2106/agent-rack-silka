@@ -54,6 +54,15 @@ El shim ya antepone un bloque corto al prompt. Si necesitas el mismo dato, o qui
 
 `workspace` es la ruta absoluta del repo. No pegues archivos enteros: el bloque ya es corto.
 
+## Corregir a un agente (`silka_send`)
+Úsalo para corregir algo que mandaste mal, o cuando el usuario te lo pida
+("lo que le mandaste a codex está mal, corrígelo").
+
+- `silka_send({sessionId, text})` encola. Es lo normal: el agente lo recibe al terminar el turno.
+- `silka_send({sessionId, text, now:true})` interrumpe y retoma la misma conversación. Úsalo solo si el agente va por mal camino. Si no, encola. Reanudar carga el contexto otra vez y gasta tokens.
+- El autor queda como `claude`.
+- Si `silka_notes` o `silka_state` traen una inserción del usuario (`tú → agente`), respétala. No la contradigas sin preguntarle.
+
 ## Verificar (ligero)
 Al revisar una sesión, llama `silka_notes`.
 Elige una:

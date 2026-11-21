@@ -63,6 +63,6 @@ export function renderComposer(h, Box, Text, {
     Box,
     { flexDirection: 'column' },
     h(Text, { wrap: 'truncate' }, clip(`› ${draft}█`, columns - 4)),
-    h(Text, { dimColor: true, wrap: 'truncate' }, clip('enter encola · ↑ edita · esc quita · ctrl+b lista · / busca', columns - 4)),
+    h(Text, { dimColor: true, wrap: 'truncate' }, clip('enter encola · ctrl+enter envía ya · alt+enter igual · ↑ elige en cola · esc borra', columns - 4)),
   );
 }

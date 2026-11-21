@@ -1,9 +1,10 @@
 import path from 'node:path';
 import { formatDuration, isBusy, originLabel, pad, promptPreview, shortId } from './format.mjs';
 import { readMeta, readPrompts, rememberSession } from './hub.mjs';
+import { clearInterrupt, shimPidForSession, writeInterrupt } from './interrupt.mjs';
 import { appendNote } from './notes.mjs';
-import { readOrigins } from './origin.mjs';
-import { clearQueue, enqueueMessage, listQueue } from './queue.mjs';
+import { originLabel as agentName, readOrigins } from './origin.mjs';
+import { clearQueue, enqueueMessage, listQueue, setQueuedNow } from './queue.mjs';
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -23,6 +24,8 @@ export function parseArgs(argv) {
       flags.model = arg.slice('--model='.length);
     } else if (arg.startsWith('--workspace=')) {
       flags.workspace = arg.slice('--workspace='.length);
+    } else if (arg === '--now') {
+      flags.now = true;
     } else {
       positional.push(arg);
     }
@@ -96,15 +99,8 @@ async function waitUntilSettled(client, sessionId) {
   throw new Error(`La sesión ${shortId(sessionId)} sigue en curso. No abrí otra.`);
 }
 
-export async function steerSession(client, status, argv) {
-  const { positional } = parseArgs(argv);
-  const id = positional[0];
-  const instruction = positional.slice(1).join(' ').trim();
-  if (!id || !instruction) throw new Error('Uso: silka steer <id> "<instrucción>"');
-  const sessions = await client.listSessions();
-  const session = matchSession(Array.isArray(sessions) ? sessions : [], id);
-  const createdId = await redirectSession(client, status, session, instruction);
-  console.log(createdId);
+export async function steerSession(client, _status, argv) {
+  return sendMessage(client, argv, { now: true });
 }
 
 export async function redirectSession(client, status, session, instruction) {
@@ -138,18 +134,77 @@ export async function noteSession(client, argv) {
   console.log(note.id);
 }
 
-export async function sendMessage(client, argv) {
-  const { positional } = parseArgs(argv);
-  const id = positional[0];
-  const message = positional.slice(1).join(' ').trim();
-  if (!id || !message) throw new Error('Uso: silka send <id> "<mensaje>"');
-  const sessions = await client.listSessions();
-  const session = matchSession(Array.isArray(sessions) ? sessions : [], id);
+function rememberInsertion(session, text) {
+  const body = String(text ?? '').trim();
+  if (!body || !session?.sessionId) return null;
+  const agent = agentName(session.agentId || 'agente');
+  try {
+    return appendNote({
+      sessionId: session.sessionId,
+      workspace: session.workspace || '',
+      kind: 'insertion',
+      text: `tú → ${agent} ${shortId(session.sessionId)}: ${body}`,
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Encola, y con `now` mientras el turno sigue escribe la orden de interrupción
+ * al pid del shim. Si el turno ya terminó, queda como un turno normal.
+ */
+export function sendToSession(session, { text, author = 'tú', now = false, messageId } = {}) {
+  if (!session?.sessionId) throw new Error('No hay sesión.');
   if (session.status === 'cancelled') {
     throw new Error(`La sesión ${shortId(session.sessionId)} fue cancelada.`);
   }
-  const item = enqueueMessage(session.sessionId, { author: 'tú', text: message });
-  console.log(`en cola ${item.id} ${shortId(session.sessionId)}`);
+  const busy = isBusy(session.status);
+  const immediate = Boolean(now) && busy;
+  let item;
+  if (messageId) {
+    item = setQueuedNow(session.sessionId, messageId, immediate);
+    if (!item) throw new Error('Ese mensaje ya no está en la cola.');
+  } else {
+    item = enqueueMessage(session.sessionId, { author, text, now: immediate });
+  }
+  if (!messageId && agentName(author) === 'tú') rememberInsertion(session, item.text);
+  let interrupted = false;
+  if (immediate) {
+    const pid = shimPidForSession(session);
+    if (pid) {
+      clearInterrupt(pid);
+      writeInterrupt({
+        pid,
+        sessionId: session.sessionId,
+        messageId: item.id,
+        text: item.text,
+        author: item.author,
+      });
+      interrupted = true;
+    }
+  }
+  return { item, interrupted, immediate };
+}
+
+export async function sendMessage(client, argv, defaults = {}) {
+  const { positional, flags } = parseArgs(argv);
+  const id = positional[0];
+  const message = positional.slice(1).join(' ').trim();
+  const now = Boolean(defaults.now || flags.now);
+  if (!id || !message) {
+    throw new Error(defaults.now && !flags.now
+      ? 'Uso: silka steer <id> "<mensaje>"'
+      : 'Uso: silka send <id> "<mensaje>" [--now]');
+  }
+  const sessions = await client.listSessions();
+  const session = matchSession(Array.isArray(sessions) ? sessions : [], id);
+  const result = sendToSession(session, { text: message, author: defaults.author || 'tú', now });
+  const where = shortId(session.sessionId);
+  if (result.interrupted) console.log(`enviado ya ${result.item.id} ${where}`);
+  else if (now) console.log(`enviado ${result.item.id} ${where}`);
+  else console.log(`en cola ${result.item.id} ${where}`);
+  return result;
 }
 
 export async function queueCommand(client, argv) {

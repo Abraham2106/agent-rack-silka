@@ -118,6 +118,7 @@ npm run silka -- hub
 npm run silka -- ls
 npm run silka -- run opencode "responde solo: ok" --model opencode/hy4-flash-free --workspace .
 npm run silka -- send <id> "responde solo: dos"
+npm run silka -- send <id> "no toques README.md" --now
 npm run silka -- steer <id> "no toques README.md"
 npm run silka -- note <id> "revisa el diff antes de aceptar"
 npm run silka -- ui
@@ -128,9 +129,9 @@ npm run silka -- connect codex
 
 `hub` usa `agent-rack.config.json` y escucha en `http://127.0.0.1:8987/sse` (o el `port` de la config). Si ya hay un hub con token y pid válidos, lo dice y sale sin error.
 
-`steer` cancela la sesión y abre otra con el mismo agente, modelo y workspace. El prompt nuevo lleva la instrucción del usuario y pide seguir desde los archivos como están: agent-rack no reanuda una sesión cancelada. `note` guarda una nota en `~/.config/silka/notes.jsonl`. `mcp` expone `silka_notes` para que el manager las lea.
+`send` encola. `send --now` (y `steer`, que es el mismo comando) interrumpe el turno y retoma la misma conversación: el agente suelta la herramienta en curso, como máximo a los 10 s, y recibe tu mensaje junto con lo que ya estaba en cola. `note` guarda una nota en `~/.config/silka/notes.jsonl`. `mcp` expone `silka_notes` para que el manager las lea.
 
-En `ui`, el encabezado muestra el puerto del hub (vivo o caído) y cuántas sesiones hay. ↑/↓ elige. Cada fila tiene ícono y color según el estado, el agente, el origen (`tú`, `claude-code`, `codex`…), el tiempo y una marca si hay mensajes en cola (`Q`) o notas (`N`). Si una sesión la lanzó otra, queda anidada debajo. A la derecha va la actividad en vivo (pasos cortos, no JSON; el texto `✎` espera un salto de línea o una pausa para no cortar una palabra) con el resumen debajo cuando termina. Abajo, Enter envía; si el turno sigue `running`, el mensaje queda **en cola**. `n` crea una sesión (agente con flechas, modelo opcional, prompt multilínea: Enter es otra línea y Ctrl+S envía). `i` redirige, `m` deja una nota, `c` cancela con confirmación, `?` abre la ayuda y `q` sale. Sin hub, el error dice `corre: silka hub`.
+En `ui`, el encabezado muestra el puerto del hub (vivo o caído) y cuántas sesiones hay. El TUI se dibuja en la pantalla alternativa y se restaura al salir (`SILKA_NO_FULLSCREEN=1` lo deja en el scrollback). ↑/↓ elige. Cada fila tiene ícono y color según el estado, el agente, el origen (`tú`, `claude-code`, `codex`…), el tiempo y una marca si hay mensajes en cola (`Q`) o notas (`N`). Si una sesión la lanzó otra, queda anidada debajo. A la derecha va el chat: Enter encola (⏳), Ctrl+Enter o Alt+Enter envían ya (⚡). ↑ elige un mensaje en cola y Esc lo borra. PgUp/PgDn, Inicio/Fin y la rueda mueven el chat. El encabezado del chat cuenta las interrupciones. `n` crea una sesión (agente con flechas, modelo opcional, prompt multilínea: Enter es otra línea y Ctrl+S envía). `m` deja una nota, `c` cancela con confirmación, `?` abre la ayuda y `q` sale. Sin hub, el error dice `corre: silka hub`.
 
 `bridge` es el servidor MCP por stdio que reexpone las herramientas del hub (y `silka_notes`, `silka_state`, `silka_changes`, `silka_decide`, `silka_decisions`). Si el hub no está, lo arranca aparte y espera. `connect` / `disconnect` registran ese puente con el nombre `agent-rack`.
 

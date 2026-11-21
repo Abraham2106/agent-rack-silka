@@ -1,5 +1,5 @@
 import { isBusy } from './format.mjs';
-import { completeDelivery, formatQueueDelivery, releaseDelivery, takeForDelivery } from './queue.mjs';
+import { completeDelivery, formatDelivery, releaseDelivery, takeForDelivery } from './queue.mjs';
 
 function stillRunning(message) {
   return /is still (running|cancelling)|still running/i.test(message);
@@ -19,7 +19,7 @@ export async function dispatchOnce(client) {
     const turnCount = Number.isInteger(session.turnCount) ? session.turnCount : 0;
     const batch = takeForDelivery(session.sessionId, { turnCount });
     if (!batch.length) continue;
-    const text = formatQueueDelivery(batch);
+    const text = formatDelivery(batch);
     const ids = batch.map((message) => message.id);
     if (!text) {
       completeDelivery(session.sessionId, ids);

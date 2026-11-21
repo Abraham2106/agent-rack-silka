@@ -1,11 +1,19 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Box, Text, render, useApp, useInput, useStdout } from 'ink';
-import { redirectSession } from './commands.mjs';
+import { sendToSession } from './commands.mjs';
 import { clip, isBusy, nestSessions } from './format.mjs';
 import { readMeta, rememberSession } from './hub.mjs';
+import {
+  MODIFY_OTHER_KEYS_OFF,
+  MODIFY_OTHER_KEYS_ON,
+  MOUSE_OFF,
+  MOUSE_ON,
+  installInputFix,
+  isSendNowKey,
+} from './keys.mjs';
 import { appendNote, unreadSessionIds } from './notes.mjs';
 import { readOrigins } from './origin.mjs';
-import { enqueueMessage, listQueue, removeQueued } from './queue.mjs';
+import { listQueue, removeQueued } from './queue.mjs';
 import { matchTaskSession, readStore, refreshConflicts, samePath, workspaceReport } from './state.mjs';
 import { readConversation } from './transcript.mjs';
 import { buildChatRows, flattenChatRows, renderChat } from './ui/chat.mjs';
@@ -16,6 +24,36 @@ import { renderEstado } from './ui/status.mjs';
 
 const h = React.createElement;
 
+/** Alto exacto de la terminal: si el layout se pasa, Ink ensucia el scrollback. */
+export function frameLayout(termRows, { composerInner = 2 } = {}) {
+  const rows = Math.max(1, Number(termRows) || 1);
+  const header = rows >= 1 ? 1 : 0;
+  const footer = rows >= 3 ? 1 : 0;
+  const banner = rows >= 4 ? 1 : 0;
+  const room = rows - header - footer - banner;
+  let composer = 0;
+  let body = 0;
+  if (room < 4) body = Math.max(0, room);
+  else {
+    composer = Math.max(3, Math.min(composerInner + 2, room - 1));
+    body = room - composer;
+  }
+  const used = header + body + composer + banner + footer;
+  if (used < rows) body += rows - used;
+  if (used > rows) body = Math.max(0, body - (used - rows));
+  return { rows, header, body, composer, banner, footer };
+}
+
+export function uiRenderOptions(env = process.env) {
+  const fullscreen = env.SILKA_NO_FULLSCREEN !== '1';
+  return {
+    alternateScreen: fullscreen,
+    maxFps: 10,
+    incrementalRendering: true,
+    kittyKeyboard: fullscreen ? { mode: 'auto' } : undefined,
+  };
+}
+
 function pendingQueue(sessionId) {
   return listQueue(sessionId).filter((item) => item.status === 'pending');
 }
@@ -23,8 +61,12 @@ function pendingQueue(sessionId) {
 export function App({ client, port, agents, models = {} }) {
   const { exit } = useApp();
   const { stdout } = useStdout();
-  const rows = Math.max(16, stdout?.rows ?? 24);
-  const columns = Math.max(60, stdout?.columns ?? 100);
+  const [term, setTerm] = useState(() => ({
+    rows: stdout?.rows || 24,
+    columns: stdout?.columns || 100,
+  }));
+  const rows = term.rows;
+  const columns = term.columns;
   const [sessions, setSessions] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
   const [chat, setChat] = useState({ id: null, events: [] });
@@ -45,6 +87,7 @@ export function App({ client, port, agents, models = {} }) {
   const [expanded, setExpanded] = useState(() => new Set());
   const [focus, setFocus] = useState(0);
   const [pinned, setPinned] = useState(true);
+  const [queueId, setQueueId] = useState(null);
 
   const sessionsRef = useRef([]);
   const selectedIdRef = useRef(null);
@@ -59,6 +102,9 @@ export function App({ client, port, agents, models = {} }) {
   const pinnedRef = useRef(true);
   const focusRef = useRef(0);
   const rowsRef = useRef([]);
+  const queueIdRef = useRef(null);
+  const pageRef = useRef(8);
+  const signatureRef = useRef('');
 
   sessionsRef.current = sessions;
   selectedIdRef.current = selectedId;
@@ -70,19 +116,35 @@ export function App({ client, port, agents, models = {} }) {
   listHiddenRef.current = listHidden;
   pinnedRef.current = pinned;
   focusRef.current = focus;
+  queueIdRef.current = queueId;
 
   function fail(err) {
     setBanner({ text: err instanceof Error ? err.message : String(err), color: 'red' });
   }
 
-  function publishQueues(sessionsNow = sessionsRef.current) {
+  function queuesFrom(sessionsNow = sessionsRef.current) {
     const next = {};
     for (const session of sessionsNow) {
       const items = listQueue(session.sessionId).filter((item) => item.status !== 'delivered');
       if (items.length) next[session.sessionId] = items;
     }
-    setQueues(next);
+    return next;
   }
+
+  function publishQueues(sessionsNow = sessionsRef.current) {
+    setQueues(queuesFrom(sessionsNow));
+  }
+
+  useEffect(() => {
+    if (!stdout?.on) return undefined;
+    const apply = () => setTerm({
+      rows: stdout.rows || 24,
+      columns: stdout.columns || 100,
+    });
+    apply();
+    stdout.on('resize', apply);
+    return () => stdout.off?.('resize', apply);
+  }, [stdout]);
 
   useEffect(() => {
     if (!selectedId && sessions[0]) setSelectedId(sessions[0].sessionId);
@@ -102,12 +164,7 @@ export function App({ client, port, agents, models = {} }) {
         const list = await client.listSessions();
         if (cancel) return;
         const sessionsNow = Array.isArray(list) ? list : [];
-        setSessions(sessionsNow);
-        setMeta(readMeta(port));
-        setOrigins(readOrigins());
-        setNoted(unreadSessionIds());
-        setHubOk(true);
-        publishQueues(sessionsNow);
+        const queuedMap = queuesFrom(sessionsNow);
         const dirs = new Set();
         const selectedNow = sessionsNow.find((session) => session.sessionId === selectedIdRef.current) ?? sessionsNow[0];
         if (selectedNow?.workspace) dirs.add(selectedNow.workspace);
@@ -115,12 +172,13 @@ export function App({ client, port, agents, models = {} }) {
           if (isBusy(session.status) && session.workspace) dirs.add(session.workspace);
         }
         const hot = new Set();
+        let nextBoard = null;
         const fresh = Date.now() - 6 * 60 * 60 * 1000;
         for (const dir of dirs) {
           try {
             refreshConflicts(dir, sessionsNow);
             const report = workspaceReport(dir);
-            if (selectedNow && samePath(selectedNow.workspace, dir)) setBoard(report);
+            if (selectedNow && samePath(selectedNow.workspace, dir)) nextBoard = report;
             for (const conflict of report.conflicts) {
               if (Date.parse(conflict.at) < fresh) continue;
               for (const taskId of conflict.taskIds || []) {
@@ -131,24 +189,38 @@ export function App({ client, port, agents, models = {} }) {
             }
           } catch { /* un workspace sin estado no frena el tablero */ }
         }
-        if (!dirs.size) setBoard(null);
-        setHotIds(hot);
+        const clearBoard = !dirs.size;
 
         const currentId = selectedIdRef.current;
         const current = sessionsNow.find((session) => session.sessionId === currentId) ?? sessionsNow[0];
-        if (!current) {
-          if (!cancel) setChat({ id: null, events: [] });
-          return;
+        let events = [];
+        if (current) {
+          let tasks = [];
+          if (current.workspace) {
+            try {
+              tasks = readStore(current.workspace).tasks.map((task) => ({ ...task, workspace: task.workspace || current.workspace }));
+            } catch { tasks = []; }
+          }
+          events = readConversation(current.sessionId, { tasks, sessions: sessionsNow });
         }
-        let tasks = [];
-        if (current.workspace) {
-          try {
-            tasks = readStore(current.workspace).tasks.map((task) => ({ ...task, workspace: task.workspace || current.workspace }));
-          } catch { tasks = []; }
-        }
-        const events = readConversation(current.sessionId, { tasks, sessions: sessionsNow });
-        if (cancel || selectedIdRef.current && selectedIdRef.current !== current.sessionId) return;
-        setChat({ id: current.sessionId, events });
+        if (cancel || (current && selectedIdRef.current && selectedIdRef.current !== current.sessionId)) return;
+        const sign = [
+          sessionsNow.map((session) => `${session.sessionId}:${session.status}:${session.turnCount || 0}`).join(','),
+          events.map((event) => event.id).join(','),
+          Object.entries(queuedMap).map(([id, items]) => `${id}:${items.map((item) => `${item.id}${item.now ? '!' : ''}`).join(',')}`).join('|'),
+          [...hot].sort().join(','),
+        ].join('#');
+        if (sign === signatureRef.current) return;
+        signatureRef.current = sign;
+        setSessions(sessionsNow);
+        setMeta(readMeta(port));
+        setOrigins(readOrigins());
+        setNoted(unreadSessionIds());
+        setHubOk(true);
+        setQueues(queuedMap);
+        setHotIds(hot);
+        setBoard(clearBoard ? null : nextBoard);
+        setChat(current ? { id: current.sessionId, events } : { id: null, events: [] });
       } catch (err) {
         if (!cancel) {
           setHubOk(false);
@@ -167,24 +239,26 @@ export function App({ client, port, agents, models = {} }) {
     };
   }, [client, port]);
 
-  function enqueueDraft() {
+  function selectedSession() {
     const id = selectedIdRef.current;
+    return sessionsRef.current.find((item) => item.sessionId === id) || null;
+  }
+
+  function enqueueDraft() {
+    const session = selectedSession();
     const text = draftRef.current.trim();
-    if (!id) {
+    if (!session) {
       setBanner({ text: 'No hay sesión seleccionada.', color: 'red' });
-      return;
-    }
-    if (!text) return false;
-    const session = sessionsRef.current.find((item) => item.sessionId === id);
-    if (session?.status === 'cancelled') {
-      setBanner({ text: 'La sesión está cancelada.', color: 'red' });
       return false;
     }
+    if (!text) return false;
     try {
-      enqueueMessage(id, { author: 'tú', text });
+      sendToSession(session, { text, author: 'tú', now: false });
       editingRef.current = false;
       setDraft('');
+      setQueueId(null);
       setPinned(true);
+      signatureRef.current = '';
       publishQueues();
       setBanner({ text: 'En cola: se envía al terminar el turno.', color: 'yellow' });
       return true;
@@ -194,31 +268,66 @@ export function App({ client, port, agents, models = {} }) {
     }
   }
 
-  function editLastQueued() {
+  function moveQueue(step) {
     const id = selectedIdRef.current;
-    if (!id || draftRef.current.trim()) return false;
-    const last = pendingQueue(id).at(-1);
-    if (!last) return false;
-    removeQueued(id, last.id);
-    editingRef.current = true;
-    setDraft(last.text);
-    publishQueues();
+    const items = pendingQueue(id);
+    if (!items.length || draftRef.current.trim()) return false;
+    const current = items.findIndex((item) => item.id === queueIdRef.current);
+    const index = current < 0 ? items.length : current;
+    const next = index + step;
+    if (next < 0) return true;
+    if (next >= items.length) {
+      setQueueId(null);
+      return step > 0;
+    }
+    setQueueId(items[next].id);
     return true;
   }
 
   function dropQueued() {
     const id = selectedIdRef.current;
     if (!id) return;
-    if (editingRef.current || draftRef.current.trim()) {
+    if (draftRef.current.trim()) {
       editingRef.current = false;
       setDraft('');
       return;
     }
-    const last = pendingQueue(id).at(-1);
-    if (!last) return;
-    removeQueued(id, last.id);
+    const picked = queueIdRef.current;
+    const target = picked
+      ? pendingQueue(id).find((item) => item.id === picked)
+      : pendingQueue(id).at(-1);
+    if (!target) return;
+    removeQueued(id, target.id);
+    setQueueId(null);
+    signatureRef.current = '';
     publishQueues();
     setBanner({ text: 'Mensaje quitado de la cola.', color: 'yellow' });
+  }
+
+  function deliverNow() {
+    const session = selectedSession();
+    if (!session) {
+      setBanner({ text: 'No hay sesión seleccionada.', color: 'red' });
+      return;
+    }
+    const picked = queueIdRef.current;
+    const draft = draftRef.current.trim();
+    try {
+      const result = picked && !draft
+        ? sendToSession(session, { messageId: picked, author: 'tú', now: true })
+        : sendToSession(session, { text: draft, author: 'tú', now: true });
+      setDraft('');
+      setQueueId(null);
+      setPinned(true);
+      signatureRef.current = '';
+      publishQueues();
+      const text = result.interrupted
+        ? 'Enviado ya. Retoma en cuanto suelte la herramienta.'
+        : 'El turno ya terminó: se envía como un turno normal.';
+      setBanner({ text, color: result.interrupted ? 'green' : 'yellow' });
+    } catch (err) {
+      fail(err);
+    }
   }
 
   function toggleTool() {
@@ -425,11 +534,26 @@ export function App({ client, port, agents, models = {} }) {
     if (banner) setBanner(null);
 
     if (key.pageUp) {
-      moveChat(-1);
+      moveChat(-pageRef.current);
       return;
     }
     if (key.pageDown) {
-      moveChat(1);
+      moveChat(pageRef.current);
+      return;
+    }
+    if (key.home) {
+      focusRef.current = 0;
+      setFocus(0);
+      pinnedRef.current = false;
+      setPinned(false);
+      return;
+    }
+    if (key.end) {
+      const last = Math.max(0, rowsRef.current.length - 1);
+      focusRef.current = last;
+      setFocus(last);
+      pinnedRef.current = true;
+      setPinned(true);
       return;
     }
     if (key.escape) {
@@ -439,7 +563,7 @@ export function App({ client, port, agents, models = {} }) {
 
     const list = orderRef.current.length ? orderRef.current : sessionsRef.current.map((session) => ({ session, depth: 0 }));
     if (key.upArrow) {
-      if (!draftRef.current.trim() && editLastQueued()) return;
+      if (moveQueue(-1)) return;
       if (draftRef.current.trim()) return;
       if (listHiddenRef.current) {
         moveChat(-1);
@@ -454,6 +578,7 @@ export function App({ client, port, agents, models = {} }) {
       return;
     }
     if (key.downArrow) {
+      if (queueIdRef.current && moveQueue(1)) return;
       if (draftRef.current.trim()) return;
       if (listHiddenRef.current) {
         moveChat(1);
@@ -465,6 +590,10 @@ export function App({ client, port, agents, models = {} }) {
       const next = list[Math.min(list.length - 1, index + 1)];
       setSelectedId(next.session.sessionId);
       setPinned(true);
+      return;
+    }
+    if (isSendNowKey(input, key)) {
+      deliverNow();
       return;
     }
     if (key.return) {
@@ -498,12 +627,7 @@ export function App({ client, port, agents, models = {} }) {
       return;
     }
     if (input === 'i' && draftRef.current === '' && !key.ctrl) {
-      if (!selectedIdRef.current) {
-        setBanner({ text: 'No hay sesión seleccionada.', color: 'red' });
-        return;
-      }
-      setField('');
-      setMode('steer');
+      setBanner({ text: 'Ctrl+Enter o Alt+Enter envían ya. Enter deja el mensaje en cola.', color: 'yellow' });
       return;
     }
     if (input === 'm' && draftRef.current === '' && !key.ctrl) {
@@ -527,7 +651,10 @@ export function App({ client, port, agents, models = {} }) {
       setWizard({ step: 'agent', index: 0, agent: agents[0], model: '', prompt: '' });
       return;
     }
-    if (input && !key.ctrl && !key.meta) setDraft((value) => value + input);
+    if (input && !key.ctrl && !key.meta) {
+      setQueueId(null);
+      setDraft((value) => value + input);
+    }
   });
 
   const selected = sessions.find((session) => session.sessionId === selectedId) ?? sessions[0] ?? null;
@@ -541,8 +668,10 @@ export function App({ client, port, agents, models = {} }) {
   else if (wizard?.step === 'model' || mode === 'confirm' || mode === 'search') composerInner = 2;
   else if (wizard?.step === 'prompt') composerInner = 4;
   else if (mode === 'steer' || mode === 'note') composerInner = 2;
-  const composerH = Math.min(composerInner + 2, Math.max(3, rows - 8));
-  const bodyH = Math.max(1, rows - composerH - 3);
+  const frame = frameLayout(rows, { composerInner });
+  const composerH = frame.composer;
+  const bodyH = frame.body;
+  pageRef.current = Math.max(1, bodyH - 3);
   const ordered = nestSessions(sessions, origins, meta);
   orderRef.current = ordered;
 
@@ -566,13 +695,12 @@ export function App({ client, port, agents, models = {} }) {
           width: listHidden ? columns : rightWidth,
           height: bodyH,
           query, expanded, focus, pinned,
+          selectedQueueId: queueId,
         }),
       );
 
-  return h(
-    Box,
-    { flexDirection: 'column', height: rows, width: columns, overflow: 'hidden' },
-    h(
+  const header = frame.header
+    ? h(Box, { height: frame.header, overflow: 'hidden' }, h(
       Text,
       { wrap: 'truncate' },
       h(Text, { bold: true }, 'silka'),
@@ -580,17 +708,32 @@ export function App({ client, port, agents, models = {} }) {
       h(Text, { color: hubOk ? 'green' : 'red' }, hubOk ? '● vivo' : '● caído'),
       `   ${sessionLabel}`,
       listHidden ? '   chat' : '',
-    ),
-    panels,
-    h(
+    ))
+    : null;
+  const composer = frame.composer
+    ? h(
       Box,
-      { height: composerH, borderStyle: 'single', borderColor: 'gray', paddingX: 1, flexDirection: 'column', overflow: 'hidden' },
+      { height: frame.composer, borderStyle: 'single', borderColor: 'gray', paddingX: 1, flexDirection: 'column', overflow: 'hidden' },
       mode === 'estado'
         ? h(Text, { dimColor: true, wrap: 'truncate' }, 'Estado del proyecto · e o esc vuelve')
         : renderComposer(h, Box, Text, { mode, draft, field, wizard, agents, columns, selected, query }),
-    ),
-    h(Text, { color: banner?.color || undefined, wrap: 'truncate' }, banner ? clip(banner.text, columns) : ' '),
-    h(Text, { dimColor: true, wrap: 'truncate' }, clip('↑↓ elegir   enter encola   n nueva   e estado   i redirigir   m nota   c cancelar   ? ayuda   q salir', columns)),
+    )
+    : null;
+  const bannerRow = frame.banner
+    ? h(Box, { height: frame.banner, overflow: 'hidden' }, h(Text, { color: banner?.color || undefined, wrap: 'truncate' }, banner ? clip(banner.text, columns) : ' '))
+    : null;
+  const footer = frame.footer
+    ? h(Box, { height: frame.footer, overflow: 'hidden' }, h(Text, { dimColor: true, wrap: 'truncate' }, clip('enter encola · ctrl+enter envía ya · alt+enter igual · ↑ cola · pgup/dn · ? ayuda · q salir', columns)))
+    : null;
+
+  return h(
+    Box,
+    { flexDirection: 'column', height: frame.rows, width: columns, overflow: 'hidden' },
+    header,
+    panels,
+    composer,
+    bannerRow,
+    footer,
   );
 }
 
@@ -598,6 +741,15 @@ export async function runUi({ client, port, agents, models }) {
   if (!process.stdout.isTTY) {
     throw new Error('silka ui necesita una terminal interactiva.');
   }
-  const instance = render(h(App, { client, port, agents, models }));
-  await instance.waitUntilExit();
+  const options = uiRenderOptions();
+  const fullscreen = options.alternateScreen;
+  const stopInput = fullscreen ? installInputFix(process.stdin) : () => {};
+  if (fullscreen) process.stdout.write(MODIFY_OTHER_KEYS_ON + MOUSE_ON);
+  try {
+    const instance = render(h(App, { client, port, agents, models }), options);
+    await instance.waitUntilExit();
+  } finally {
+    stopInput();
+    if (fullscreen && process.stdout.isTTY) process.stdout.write(MOUSE_OFF + MODIFY_OTHER_KEYS_OFF);
+  }
 }
