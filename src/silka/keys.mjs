@@ -99,7 +99,27 @@ export function installInputFix(stdin) {
   if (!stdin || typeof stdin.read !== 'function' || stdin.__silkaInput) return () => {};
   const orig = stdin.read.bind(stdin);
   let held = '';
+  let flush = '';
+  let timer = null;
+  // Un Esc solo queda retenido esperando ver si empieza una secuencia (\x1b[…). Si en 40 ms
+  // no llega nada más, era la tecla Esc: la soltamos para que Ink la vea.
+  const armFlush = () => {
+    clearTimeout(timer);
+    if (!held) return;
+    timer = setTimeout(() => {
+      if (!held) return;
+      flush = held;
+      held = '';
+      stdin.emit('readable');
+    }, 40);
+    timer.unref?.();
+  };
   stdin.read = function silkaRead(size) {
+    if (flush) {
+      const out = flush;
+      flush = '';
+      return out;
+    }
     let produced = '';
     for (;;) {
       const chunk = orig(size);
@@ -110,6 +130,7 @@ export function installInputFix(stdin) {
       produced += translated.out;
       if (produced) break;
     }
+    armFlush();
     return produced || null;
   };
   stdin.__silkaInput = true;

@@ -58,7 +58,9 @@ export function buildChatRows(events, queued, query) {
   const pending = queued || [];
   if (!pending.length) rows.push({ key: 'queue-empty', kind: 'queue', text: 'vacía' });
   for (const item of pending) {
-    const mark = item.now ? '⚡' : '⏳';
+    const mark = item.status === 'failed'
+      ? `✗ no entregado: ${item.error || 'error'}`
+      : (item.now ? '⚡' : '⏳');
     const text = `${item.author || 'tú'}  ${String(item.text || '').replace(/\s+/g, ' ').trim()}  ${mark}`;
     if (!keep(text)) continue;
     rows.push({ key: item.id, kind: 'queue', text });

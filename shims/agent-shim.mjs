@@ -792,12 +792,10 @@ function watchInterrupt(child, gate) {
       clearInterrupt(process.pid);
       if (child.exitCode != null || child.signalCode != null) return;
       userStop = true;
-      signalProcessTree(child.pid);
-      const force = setTimeout(() => {
-        signalProcessTree(child.pid, { force: true });
-        killTracked(trackerFor(child));
-      }, 2000);
-      force.unref?.();
+      // Interrupción pedida por el usuario: forzado de una vez. En Windows taskkill sin /F
+      // no detiene procesos de consola y solo sumaba 2 s de espera.
+      signalProcessTree(child.pid, { force: true });
+      killTracked(trackerFor(child));
     });
   }, 200);
   timer.unref?.();

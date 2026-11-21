@@ -183,7 +183,14 @@ test('silka_send con y sin now, y un sub-agente no toca sesiones ajenas', () => 
 }));
 
 test('el shim espera a que termine la herramienta y respeta el tope', async () => {
-  assert.equal(TOOL_WAIT_MS, 10_000);
+  assert.equal(TOOL_WAIT_MS, 5_000);
+  // Una lectura no bloquea la interrupción; una edición sí.
+  const reads = createToolGate();
+  reads.observe(cursorToolPhase({ type: 'tool_call', subtype: 'started', call_id: 'r', tool_call: { readToolCall: {} } }));
+  assert.equal(reads.busy(), false);
+  const edits = createToolGate();
+  edits.observe(cursorToolPhase({ type: 'tool_call', subtype: 'started', call_id: 'e', tool_call: { editToolCall: {} } }));
+  assert.equal(edits.busy(), true);
   const gate = createToolGate();
   gate.observe(cursorToolPhase({ type: 'tool_call', subtype: 'started', call_id: 'a' }));
   const started = Date.now();
@@ -222,4 +229,20 @@ test('parsea Ctrl+Enter y Alt+Enter', () => {
   assert.equal(uiRenderOptions({}).alternateScreen, true);
   assert.equal(uiRenderOptions({ SILKA_NO_FULLSCREEN: '1' }).alternateScreen, false);
   assert.equal(uiRenderOptions({}).maxFps, 10);
+});
+
+test('Esc solo se suelta tras una pausa corta (no queda retenido)', async () => {
+  const { installInputFix } = await import('../src/silka/keys.mjs');
+  const { EventEmitter } = await import('node:events');
+  const stdin = new EventEmitter();
+  const chunks = ['\u001b'];
+  stdin.read = () => (chunks.length ? chunks.shift() : null);
+  const restore = installInputFix(stdin);
+  assert.equal(stdin.read(), null); // retenido: podría empezar una secuencia
+  const released = await new Promise((resolve) => {
+    stdin.once('readable', () => resolve(stdin.read()));
+    setTimeout(() => resolve('timeout'), 500);
+  });
+  assert.equal(released, '\u001b');
+  restore();
 });

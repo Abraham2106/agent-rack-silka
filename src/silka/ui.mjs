@@ -156,6 +156,7 @@ export function App({ client, port, agents, models = {} }) {
   useEffect(() => {
     let cancel = false;
     let running = false;
+    let painted = false;
 
     async function tick() {
       if (running || cancel) return;
@@ -164,6 +165,14 @@ export function App({ client, port, agents, models = {} }) {
         const list = await client.listSessions();
         if (cancel) return;
         const sessionsNow = Array.isArray(list) ? list : [];
+        // Primer cuadro: pinta la lista ya (el hub responde en ms). El estado de cada
+        // workspace (git, conflictos) llega después sin bloquear la lista.
+        if (!painted) {
+          painted = true;
+          setSessions(sessionsNow);
+          setOrigins(readOrigins());
+          setHubOk(true);
+        }
         const queuedMap = queuesFrom(sessionsNow);
         const dirs = new Set();
         const selectedNow = sessionsNow.find((session) => session.sessionId === selectedIdRef.current) ?? sessionsNow[0];

@@ -64,3 +64,30 @@ test('la cola persiste, agrupa y se entrega una sola vez', async () => {
   assert.equal(listQueue(retry).length, 0);
   assert.equal(clearQueue(sessionId), 0);
 });
+
+test('cola de una sesión que el hub ya no conoce: se marca no entregada y avisa', async () => {
+  const { enqueueMessage, listQueue, clearQueue } = await import('../src/silka/queue.mjs');
+  const { dispatchOnce } = await import('../src/silka/dispatch.mjs');
+  const id = `huerfana-${process.pid}-${Date.now()}`;
+  enqueueMessage(id, { author: 'tú', text: 'hola' });
+  const sent = await dispatchOnce({ listSessions: async () => [], sendInput: async () => { throw new Error('no debería llamarse'); } });
+  assert.equal(sent, 0);
+  const [msg] = listQueue(id);
+  assert.equal(msg.status, 'failed');
+  assert.match(msg.error, /ya no existe en el hub/);
+  clearQueue(id);
+});
+
+test('si reanudar falla, el lote queda como no entregado (no se reintenta en bucle)', async () => {
+  const { enqueueMessage, listQueue, clearQueue } = await import('../src/silka/queue.mjs');
+  const { dispatchOnce } = await import('../src/silka/dispatch.mjs');
+  const id = `falla-${process.pid}-${Date.now()}`;
+  enqueueMessage(id, { author: 'tú', text: 'hola' });
+  const client = { listSessions: async () => [{ sessionId: id, status: 'completed', turnCount: 1 }], sendInput: async () => { throw new Error('resume roto'); } };
+  await dispatchOnce(client);
+  const [msg] = listQueue(id);
+  assert.equal(msg.status, 'failed');
+  assert.match(msg.error, /resume roto/);
+  assert.equal(await dispatchOnce(client), 0);
+  clearQueue(id);
+});

@@ -197,3 +197,32 @@ export function releaseDelivery(sessionId, ids) {
     return true;
   });
 }
+
+/** Marca un lote como no entregado (fallo de reanudación o sesión perdida). Queda visible en el chat. */
+export function failDelivery(sessionId, ids, reason) {
+  const out = new Set(ids || []);
+  return withQueue(sessionId, (queue) => {
+    for (const message of queue.messages) {
+      if (out.has(message.id) && message.status !== 'delivered') {
+        message.status = 'failed';
+        message.error = String(reason || 'no se pudo entregar');
+      }
+    }
+    if (!queue.messages.some((message) => message.status === 'delivering')) queue.delivery = null;
+    return true;
+  });
+}
+
+/** Ids de sesión con mensajes que todavía esperan entrega. */
+export function queuedSessionIds() {
+  let files = [];
+  try { files = fs.readdirSync(queueDir()).filter((name) => name.endsWith('.json')); } catch { return []; }
+  const ids = [];
+  for (const name of files) {
+    const id = name.slice(0, -5);
+    try {
+      if (readQueueFile(id).messages.some((m) => m.status === 'pending' || m.status === 'delivering')) ids.push(id);
+    } catch { /* archivo raro: se ignora */ }
+  }
+  return ids;
+}

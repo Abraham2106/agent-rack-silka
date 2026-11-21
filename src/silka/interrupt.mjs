@@ -5,8 +5,16 @@ import { originLabel } from './origin.mjs';
 import { silkaConfigDir } from './paths.mjs';
 import { readStore, samePath } from './state.mjs';
 
-/** Tope para no cortar una herramienta a medias. */
-export const TOOL_WAIT_MS = 10_000;
+/** Tope para no cortar a medias una herramienta que escribe o ejecuta algo. */
+export const TOOL_WAIT_MS = 5_000;
+
+const READ_ONLY = /read|grep|glob|list|^ls$|search|find|view|fetch|web|todo|reasoning|think/i;
+/** Solo esperamos herramientas que escriben o ejecutan; una lectura se puede cortar sin riesgo. Desconocida = esperar. */
+export function isMutatingTool(kind) {
+  const name = String(kind || '');
+  if (!name) return true;
+  return !READ_ONLY.test(name);
+}
 
 export function interruptDir() {
   return path.join(silkaConfigDir(), 'interrupt');
@@ -75,8 +83,9 @@ export function cursorToolPhase(ev) {
   const id = String(ev.call_id || ev.callId || ev.tool_call_id || '');
   if (!id) return null;
   const sub = String(ev.subtype || '');
+  const mutating = isMutatingTool(Object.keys(ev.tool_call || {})[0]);
   if (sub === 'completed' || sub === 'error') return { id, phase: 'end' };
-  if (sub === 'started') return { id, phase: 'start' };
+  if (sub === 'started') return { id, phase: 'start', mutating };
   return null;
 }
 
@@ -86,7 +95,7 @@ export function opencodeToolPhase(ev) {
   const id = String(part.id || part.callID || part.callId || '');
   if (!id) return null;
   const status = String(part.state?.status || '');
-  if (status === 'running') return { id, phase: 'start' };
+  if (status === 'running') return { id, phase: 'start', mutating: isMutatingTool(part.tool) };
   if (status === 'completed' || status === 'error') return { id, phase: 'end' };
   return null;
 }
@@ -98,7 +107,7 @@ export function codexToolPhase(data) {
   if (String(item.type || '') === 'agent_message') return null;
   const id = String(item.id || item.call_id || '');
   if (!id) return null;
-  return { id, phase: type === 'item.started' ? 'start' : 'end' };
+  return { id, phase: type === 'item.started' ? 'start' : 'end', mutating: isMutatingTool(item.type) };
 }
 
 /** Herramientas abiertas. `wait` sigue hasta que cierran, o hasta el tope. */
@@ -114,7 +123,7 @@ export function createToolGate() {
   return {
     observe(phase) {
       if (!phase?.id) return;
-      if (phase.phase === 'start') open.add(phase.id);
+      if (phase.phase === 'start' && phase.mutating !== false) open.add(phase.id);
       else if (phase.phase === 'end') open.delete(phase.id);
       release();
     },

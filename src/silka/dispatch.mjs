@@ -1,5 +1,10 @@
 import { isBusy } from './format.mjs';
-import { completeDelivery, formatDelivery, releaseDelivery, takeForDelivery } from './queue.mjs';
+import { completeDelivery, failDelivery, formatDelivery, listQueue, queuedSessionIds, releaseDelivery, takeForDelivery } from './queue.mjs';
+import { appendNote } from './notes.mjs';
+
+function warn(sessionId, text) {
+  try { appendNote({ sessionId, text, kind: 'entrega-fallida' }); } catch { /* la nota es opcional */ }
+}
 
 function stillRunning(message) {
   return /is still (running|cancelling)|still running/i.test(message);
@@ -31,16 +36,29 @@ export async function dispatchOnce(client) {
       sent += 1;
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
+      if (stillRunning(detail)) { releaseDelivery(session.sessionId, ids); continue; }
+      // Antes solo iba a stderr. Ahora queda en el chat (✗) y como nota para el manager.
       console.error(`cola ${String(session.sessionId).slice(0, 8)}: ${detail}`);
-      releaseDelivery(session.sessionId, ids);
-      if (stillRunning(detail)) continue;
+      failDelivery(session.sessionId, ids, detail);
+      warn(session.sessionId, `No se pudo entregar ${ids.length} mensaje(s) a ${String(session.sessionId).slice(0, 8)}: ${detail}`);
     }
+  }
+  // Colas de sesiones que el hub ya no conoce (p. ej. se reinició): se marcan y se avisa,
+  // en vez de esperar para siempre.
+  const known = new Set(sessions.map((s) => s?.sessionId).filter(Boolean));
+  for (const id of queuedSessionIds()) {
+    if (known.has(id)) continue;
+    const ids = listQueue(id).filter((m) => m.status === 'pending' || m.status === 'delivering').map((m) => m.id);
+    if (!ids.length) continue;
+    const reason = 'la sesión ya no existe en el hub (¿se reinició?); vuelve a enviarlo a una sesión nueva';
+    failDelivery(id, ids, reason);
+    warn(id, `${ids.length} mensaje(s) en cola para ${id.slice(0, 8)} no se entregaron: ${reason}.`);
   }
   return sent;
 }
 
 /** Corre al lado del hub. `readRuntime` y `connect` los pone silka hub. */
-export function startQueueDispatcher({ port, readRuntime, connect, intervalMs = 1000 } = {}) {
+export function startQueueDispatcher({ port, readRuntime, connect, intervalMs = 300 } = {}) {
   let client = null;
   let token = '';
   let running = false;
