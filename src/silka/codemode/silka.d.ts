@@ -1,9 +1,9 @@
 /**
- * Silka Code Mode API v1.1.0 (compatible con 1.0.x)
+ * Silka Code Mode API v1.2.0 (compatible con 1.0.x y 1.1.x)
  * @module silka
  */
 
-export declare const SILKA_API_VERSION: '1.1.0';
+export declare const SILKA_API_VERSION: '1.2.0';
 
 export type SilkaErrorCode =
   | 'E_SYNTAX'
@@ -104,6 +104,26 @@ export interface ModelInfo {
   name?: string;
 }
 
+export interface PlanWaveStatus {
+  index: number;
+  status: string;
+  taskIds: string[];
+  tasks: Array<{ id: string; state: string; wave: number; mergeCommit: string | null; blockedReason: string | null }>;
+  evidence: TaskEvidenceItem[] | null;
+  culpritTaskId: string | null;
+  waveCard: Record<string, unknown> | null;
+  blockedReason: string | null;
+  mergeCommits: Array<{ taskId: string; commit: string; at?: string }>;
+  passedAtCommit: string | null;
+}
+
+export interface PlanStatus {
+  id: string;
+  integration: { verify?: string[]; accept?: AcceptCriterion[]; maxRepairs?: number; verifySource?: string } | null;
+  destBaseline: string | null;
+  waves: PlanWaveStatus[];
+}
+
 export interface SilkaPlan {
   /**
    * Construye un plan desde un archivo de tareas (F2).
@@ -113,6 +133,8 @@ export interface SilkaPlan {
    * Construye un plan desde una lista en memoria.
    */
   fromList(items: TaskSpec[]): Promise<TaskSpec[]>;
+  /** Estado de oleadas e integración (I). */
+  status(planId: string): Promise<PlanStatus>;
 }
 
 export interface SilkaState {

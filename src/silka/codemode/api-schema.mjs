@@ -89,6 +89,8 @@ export function validateApiArgs(path, args) {
       return list;
     case 'merge.status':
       return [assertString(list[0], 'id')];
+    case 'plan.status':
+      return [assertString(list[0], 'planId')];
     default:
       return list;
   }

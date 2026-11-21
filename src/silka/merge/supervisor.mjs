@@ -6,6 +6,8 @@ import { STATES } from '../tasks/states.mjs';
 import { claimMergeLease } from './owner.mjs';
 import { recoverIncompleteMerge } from './recover.mjs';
 import { drainMergeQueue } from './runner.mjs';
+import { listPlans } from '../integration/store.mjs';
+import { recoverIntegrationRun } from '../integration/runner.mjs';
 
 function repoRootsWithMergeQueue() {
   const { root } = loadSilkaConfig();
@@ -34,6 +36,15 @@ export async function superviseMergeOnce(client, { repoRoots } = {}) {
     // eslint-disable-next-line no-await-in-loop
     const res = await drainMergeQueue(repoRoot, { fencingToken: lease.fencingToken, callHub });
     if (res.processed) n += 1;
+    for (const plan of listPlans(repoRoot)) {
+      for (let w = 0; w < (plan.waves?.length || 0); w += 1) {
+        const ws = plan.wavesState?.[w];
+        if (ws?.status === 'running') {
+          // eslint-disable-next-line no-await-in-loop
+          await recoverIntegrationRun(repoRoot, plan.id, w);
+        }
+      }
+    }
   }
   return n;
 }

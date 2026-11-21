@@ -16,6 +16,8 @@ import {
 import { activeWorkStates, canTransition, STATES } from './states.mjs';
 import { createTaskWorktree, removeTaskWorktree } from './worktree.mjs';
 import { assertVerifyDeclared, runVerifyWithEvidence } from './verify.mjs';
+import { runSetupWithEvidence, setupForTask } from './setup.mjs';
+import { integrationBlockedReason } from '../integration/runner.mjs';
 
 function nowIso() {
   return new Date().toISOString();
@@ -224,6 +226,14 @@ export class TaskManager {
           recordTransition(task, STATES.BLOQUEADA, 'dependencia_descartada');
           continue;
         }
+        const waveBlock = integrationBlockedReason(this.repoRoot, task);
+        if (waveBlock) {
+          if (task.state !== STATES.BLOQUEADA) {
+            task.blockedReason = waveBlock;
+            recordTransition(task, STATES.BLOQUEADA, 'oleada_integración');
+          }
+          continue;
+        }
         const waiting = task.state === STATES.ESPERANDO_DEPS || task.state === STATES.PLANIFICADA;
         if (!waiting) continue;
         if ((task.dependsOn || []).length && !depsMerged(store, task)) continue;
@@ -330,8 +340,20 @@ export class TaskManager {
     const env = portsEnv(current.allocatedPorts);
     let evidence = [];
     let verifyRef = writeTaskLog(this.repoRoot, taskId, 'verify', '');
-  let allOk = true;
-    if (verifyCmds.length) {
+    let allOk = true;
+
+    if (current.worktreePath) {
+      const setupSpec = setupForTask(current, this.repoRoot);
+      const sr = runSetupWithEvidence(this.repoRoot, taskId, current.worktreePath, setupSpec, {
+        timeoutMs: this.verifyTimeoutMs,
+        env,
+        repoRootForLink: this.repoRoot,
+      });
+      evidence = evidence.concat(sr.items);
+      allOk = allOk && sr.ok;
+    }
+
+    if (allOk && verifyCmds.length) {
       const vr = runVerifyWithEvidence(this.repoRoot, taskId, current.worktreePath, verifyCmds, {
         timeoutMs: this.verifyTimeoutMs,
         env,

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { gitRun } from './git.mjs';
+import { prepareWorktreeRemoval } from './worktree-cleanup.mjs';
 
 export function worktreePath(repoRoot, taskId) {
   return path.join(repoRoot, '.silka', 'worktrees', taskId);
@@ -25,8 +26,10 @@ export function createTaskWorktree(repoRoot, taskId, baseCommit) {
 export function removeTaskWorktree(repoRoot, taskId) {
   const wt = worktreePath(repoRoot, taskId);
   if (!fs.existsSync(wt)) return;
+  prepareWorktreeRemoval(repoRoot, wt);
   const r = gitRun(repoRoot, ['worktree', 'remove', '--force', wt], { repoRoot });
   if (!r.ok) {
+    prepareWorktreeRemoval(repoRoot, wt);
     gitRun(repoRoot, ['worktree', 'prune'], { repoRoot });
     try { fs.rmSync(wt, { recursive: true, force: true }); } catch { /* ya no está */ }
   }

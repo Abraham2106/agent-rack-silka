@@ -1,10 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { silkaError } from '../codemode/errors.mjs';
-import { validateTaskList } from './model.mjs';
+import { parsePlanDocument } from '../integration/parse.mjs';
 
 export function planFromList(items, repoRoot) {
-  return validateTaskList(items, repoRoot ? { repoRoot } : {});
+  const parsed = parsePlanDocument(items, repoRoot ? { repoRoot } : {});
+  return parsed.tasks;
 }
 
 export function planFromFile(filePath, cwd = process.cwd()) {
@@ -15,19 +16,16 @@ export function planFromFile(filePath, cwd = process.cwd()) {
   const text = fs.readFileSync(abs, 'utf8');
   if (abs.toLowerCase().endsWith('.json')) {
     const parsed = JSON.parse(text);
-    const list = Array.isArray(parsed) ? parsed : parsed?.tasks;
-    return validateTaskList(list, { repoRoot: path.resolve(cwd) });
+    return parsePlanDocument(parsed, { repoRoot: path.resolve(cwd) }).tasks;
   }
   try {
     const parsed = JSON.parse(text);
-    if (Array.isArray(parsed)) return validateTaskList(parsed);
-    if (Array.isArray(parsed?.tasks)) return validateTaskList(parsed.tasks);
+    return parsePlanDocument(parsed, { repoRoot: path.resolve(cwd) }).tasks;
   } catch { /* markdown u otro */ }
   const block = text.match(/```json\s*([\s\S]*?)```/i);
   if (block) {
     const parsed = JSON.parse(block[1]);
-    const list = Array.isArray(parsed) ? parsed : parsed?.tasks;
-    return validateTaskList(list, { repoRoot: path.resolve(cwd) });
+    return parsePlanDocument(parsed, { repoRoot: path.resolve(cwd) }).tasks;
   }
   throw silkaError('E_TASK_INVALID', 'Formato de plan no reconocido (usa .json o un bloque ```json).');
 }

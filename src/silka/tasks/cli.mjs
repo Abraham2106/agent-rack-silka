@@ -1,12 +1,17 @@
 import path from 'node:path';
+import { currentCommit } from './git.mjs';
 import { createTaskManager } from './manager.mjs';
-import { planFromFile } from './plan.mjs';
+import { planDocumentFromFile } from '../integration/parse.mjs';
+import { registerPlanInStore } from '../integration/runner.mjs';
 
 export async function taskRunFromFile(planFile, opts = {}) {
   const workspace = path.resolve(opts.workspace || process.cwd());
-  const plan = planFromFile(planFile, workspace);
+  const doc = planDocumentFromFile(planFile, workspace);
+  if (doc.plan) {
+    registerPlanInStore(workspace, doc.plan, currentCommit(workspace));
+  }
   const mgr = createTaskManager(workspace, { maxConcurrentTasks: opts.maxConcurrent });
-  const launched = await mgr.launch(plan, {
+  const launched = await mgr.launch(doc.tasks, {
     cause: 'cli',
     callHub: opts.callHub,
     manual: !opts.callHub,

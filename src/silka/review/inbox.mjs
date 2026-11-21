@@ -1,5 +1,6 @@
 import { STATES } from '../tasks/states.mjs';
 import { readTaskStore } from '../tasks/store.mjs';
+import { listPlans } from '../integration/store.mjs';
 import { escapeAgentText } from './escape.mjs';
 
 const RISK_ORDER = { alto: 0, medio: 1, bajo: 2 };
@@ -50,11 +51,42 @@ export function inboxItemFromTask(task) {
   };
 }
 
+function waveInboxItems(repoRoot) {
+  const items = [];
+  for (const plan of listPlans(repoRoot)) {
+    for (const ws of plan.wavesState || []) {
+      if (!ws?.waveCard) continue;
+      items.push({
+        id: `wave:${plan.id}:${ws.index}`,
+        title: ws.waveCard.title,
+        state: 'integracion_oleada',
+        version: 1,
+        risk: ws.waveCard.risk || 'alto',
+        gates: ws.waveCard.gates,
+        declared: [],
+        agentSaid: { notes: '', from: 'silka', openQuestions: [] },
+        evidence: ws.waveCard.evidence || [],
+        verifySource: plan.integration?.verifySource,
+        files: [],
+        outOfScope: [],
+        diffStats: { added: 0, removed: 0 },
+        verifyRef: null,
+        enteredAt: ws.waveCard.at || plan.createdAt || '',
+        sessionId: null,
+        planId: plan.id,
+        wave: ws.index,
+      });
+    }
+  }
+  return items;
+}
+
 export function listInbox(repoRoot) {
   const store = readTaskStore(repoRoot);
   const items = store.tasks
     .map(inboxItemFromTask)
     .filter(Boolean)
+    .concat(waveInboxItems(repoRoot))
     .sort((a, b) => {
       const ra = RISK_ORDER[a.risk] ?? 9;
       const rb = RISK_ORDER[b.risk] ?? 9;

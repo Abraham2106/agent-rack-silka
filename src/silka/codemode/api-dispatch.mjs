@@ -3,6 +3,7 @@ import { cachedModels, loadModels } from '../models.mjs';
 import { isBusy } from '../format.mjs';
 import { matchSession } from '../commands.mjs';
 import { createMergeService } from '../merge/service.mjs';
+import { createIntegrationService } from '../integration/service.mjs';
 import { createReviewService } from '../review/service.mjs';
 import { createTaskManager } from '../tasks/manager.mjs';
 import { planFromFile, planFromList } from '../tasks/plan.mjs';
@@ -232,6 +233,11 @@ export function createApiDispatcher(ctx) {
     if (method === 'merge.status') {
       const svc = createMergeService(ctx.workspace);
       return svc.status(validated[0]);
+    }
+
+    if (method === 'plan.status') {
+      const svc = createIntegrationService(ctx.workspace);
+      return svc.planStatus(validated[0]);
     }
 
     if (method === 'agents.stats') {

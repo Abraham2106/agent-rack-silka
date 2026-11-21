@@ -28,6 +28,7 @@ export function readTaskStore(repoRoot) {
   return {
     version: Number(parsed.version) || 1,
     tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [],
+    plans: Array.isArray(parsed.plans) ? parsed.plans : [],
     maxConcurrentTasks: Number(parsed.maxConcurrentTasks) > 0 ? Number(parsed.maxConcurrentTasks) : 5,
   };
 }

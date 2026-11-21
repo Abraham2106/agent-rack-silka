@@ -23,6 +23,7 @@ function printHelp() {
   silka graph status [workspace]
   silka graph build [workspace]
   silka task run <archivo-plan> [--workspace dir]
+  silka plan status <planId> [workspace]
   silka task ls [workspace]
   silka task verify <id> [workspace]
   silka review ls [workspace]
@@ -125,6 +126,20 @@ ${agent}  (${cat.models.length}${cat.total > cat.models.length ? ` de ${cat.tota
     const { metricsCommand } = await import('./metrics/cli.mjs');
     metricsCommand(argv.slice(1), process.cwd());
     return;
+  }
+  if (cmd === 'plan') {
+    const sub = argv[1];
+    const { parseArgs } = await import('./commands.mjs');
+    const { positional } = parseArgs(argv.slice(2));
+    if (sub === 'status') {
+      const { planStatus } = await import('./integration/cli.mjs');
+      const id = positional[0];
+      const ws = positional[1] || process.cwd();
+      if (!id) throw new Error('Uso: silka plan status <planId> [workspace]');
+      planStatus(id, ws);
+      return;
+    }
+    throw new Error('Uso: silka plan status <planId> [workspace]');
   }
   if (cmd === 'task') {
     const sub = argv[1];

@@ -63,6 +63,7 @@ export function normalizeTaskInput(raw, { id, repoRoot, strictVerify = false } =
   const dependsOn = Array.isArray(raw.dependsOn)
     ? raw.dependsOn.map(String).filter(Boolean)
     : (raw.dependsOn ? [String(raw.dependsOn)] : []);
+  const wave = Number(raw.wave);
   const ports = Number(raw.ports);
   const maxRepairs = Number(raw.maxRepairs);
   return {
@@ -78,8 +79,13 @@ export function normalizeTaskInput(raw, { id, repoRoot, strictVerify = false } =
     agent: raw.agent ? String(raw.agent) : undefined,
     model: raw.model ? String(raw.model) : undefined,
     dependsOn,
+    planId: raw.planId ? String(raw.planId) : undefined,
+    wave: Number.isInteger(wave) && wave >= 0 ? wave : undefined,
+    integrationRepairFor: raw.integrationRepairFor ? String(raw.integrationRepairFor) : undefined,
     ports: Number.isInteger(ports) && ports > 0 ? ports : 0,
     prompt: raw.prompt ? String(raw.prompt) : undefined,
+    setup: raw.setup,
+    setupMode: raw.setupMode === 'link' ? 'link' : (raw.setupMode === 'install' ? 'install' : undefined),
   };
 }
 

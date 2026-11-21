@@ -5,6 +5,7 @@ import { createTaskManager } from '../tasks/manager.mjs';
 import { getTask, mutateTaskStore } from '../tasks/store.mjs';
 import { STATES } from '../tasks/states.mjs';
 import { assertVerifyDeclared, runVerifyCommands } from '../tasks/verify.mjs';
+import { runSetupWithEvidence, setupForTask } from '../tasks/setup.mjs';
 import { portsEnv } from '../tasks/ports.mjs';
 import { branchName } from '../tasks/worktree.mjs';
 import { appendJournal } from './journal.mjs';
@@ -20,6 +21,7 @@ import {
 import { assertFencing } from './owner.mjs';
 import { clearMergeRuntime, writeMergeRuntime } from './state.mjs';
 import { listMergeQueue } from './queue.mjs';
+import { afterTaskMerged } from '../integration/runner.mjs';
 
 function injectCrash(point) {
   if (process.env.SILKA_MERGE_INJECT === point) {
@@ -107,6 +109,19 @@ export async function mergeOneTask(repoRoot, taskId, { fencingToken, callHub, ve
   }
 
   writeMergeRuntime(repoRoot, { taskId, step: 'verify', fencingToken });
+  const setupSpec = setupForTask(task, repoRoot);
+  const setupRes = runSetupWithEvidence(repoRoot, taskId, wt, setupSpec, {
+    timeoutMs: verifyTimeoutMs ?? 120_000,
+    env: portsEnv(task.allocatedPorts),
+    repoRootForLink: repoRoot,
+  });
+  if (!setupRes.ok) {
+    clearMergeRuntime(repoRoot);
+    const detail = formatMergeError('setup', { log: setupRes.log || 'setup falló' });
+    mgr.failMerge(taskId, detail, { callHub });
+    return { repaired: true, detail };
+  }
+
   const verifyCmds = assertVerifyDeclared(task.verify);
   appendJournal(repoRoot, { phase: 'before', step: 'verify', taskId, fencingToken });
   injectCrash('during_verify');
@@ -200,6 +215,8 @@ export async function mergeOneTask(repoRoot, taskId, { fencingToken, callHub, ve
     return store;
   });
   mgr.completeMerge(taskId);
+  // eslint-disable-next-line no-await-in-loop
+  const integration = await afterTaskMerged(repoRoot, taskId, { callHub, verifyTimeoutMs });
   appendMetric(repoRoot, {
     id: taskId,
     agent: task.agent || 'desconocido',
@@ -211,7 +228,7 @@ export async function mergeOneTask(repoRoot, taskId, { fencingToken, callHub, ve
     turns: null,
     sources: { mergeBroke: 'cola_mezcla' },
   });
-  return { merged: true, commit: newTip };
+  return { merged: true, commit: newTip, integration };
 }
 
 export async function drainMergeQueue(repoRoot, opts = {}) {
