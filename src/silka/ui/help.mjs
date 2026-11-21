@@ -14,6 +14,7 @@ export function helpLines() {
     'i         recuerda: ctrl+enter o alt+enter envían ya',
     'm         nota para el manager (silka_notes)',
     'e         estado del workspace: rama, tareas, conflictos, decisiones',
+    'r         bandeja de revisión: a aprueba, x rechaza, d descarta, enter detalle',
     'c         cancelar, pide confirmación',
     '?         esta ayuda',
     'q         salir',

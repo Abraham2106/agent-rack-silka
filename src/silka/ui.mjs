@@ -26,7 +26,20 @@ import { cachedModels, loadModels, pickerItems, recentModels, rememberRecentMode
 import { loadSilkaConfig } from './hub.mjs';
 import { renderHelp } from './ui/help.mjs';
 import { renderSessionList } from './ui/list.mjs';
+import {
+  loadReviewInbox,
+  renderReviewDetail,
+  renderReviewInbox,
+  reviewBannerFromError,
+  reviewBannerFromResult,
+  reviewComposerLine,
+  reviewDetailLines,
+  reviewFooterKeys,
+  reviewWorkspace,
+} from './ui/review.mjs';
 import { renderEstado } from './ui/status.mjs';
+import { createHubCallAdapter } from './tasks/hub-call.mjs';
+import { createReviewService } from './review/service.mjs';
 
 const h = React.createElement;
 
@@ -52,7 +65,7 @@ export function frameLayout(termRows, { composerInner = 2 } = {}) {
 
 /** Atajos del pie: la tecla resalta, la acción queda atenuada. Se recortan si no caben. */
 export function footerKeys(width) {
-  const keys = [['tab', 'cambia'], ['n', 'nueva'], ['e', 'estado'], ['m', 'nota'], ['c', 'cancela'], ['/', 'busca'], ['ctrl+b', 'lista'], ['?', 'ayuda'], ['q', 'sale']];
+  const keys = [['tab', 'cambia'], ['n', 'nueva'], ['r', 'bandeja'], ['e', 'estado'], ['m', 'nota'], ['c', 'cancela'], ['/', 'busca'], ['ctrl+b', 'lista'], ['?', 'ayuda'], ['q', 'sale']];
   const segs = [];
   let used = 0;
   for (const [key, label] of keys) {
@@ -115,6 +128,10 @@ export function App({ client, port, agents, models = {} }) {
   const prevStatusRef = useRef(new Map());
   const [catalogs, setCatalogs] = useState({});
   const [defaults, setDefaults] = useState(() => ({ ...models }));
+  const [reviewItems, setReviewItems] = useState([]);
+  const [reviewIndex, setReviewIndex] = useState(0);
+  const [reviewWs, setReviewWs] = useState('');
+  const [reviewDetail, setReviewDetail] = useState([]);
 
   const sessionsRef = useRef([]);
   const selectedIdRef = useRef(null);
@@ -133,6 +150,9 @@ export function App({ client, port, agents, models = {} }) {
   const pageRef = useRef(8);
   const signatureRef = useRef('');
   const hubDownRef = useRef(false);
+  const reviewIndexRef = useRef(0);
+  const reviewItemsRef = useRef([]);
+  const reviewWsRef = useRef('');
 
   sessionsRef.current = sessions;
   selectedIdRef.current = selectedId;
@@ -145,6 +165,9 @@ export function App({ client, port, agents, models = {} }) {
   pinnedRef.current = pinned;
   focusRef.current = focus;
   queueIdRef.current = queueId;
+  reviewIndexRef.current = reviewIndex;
+  reviewItemsRef.current = reviewItems;
+  reviewWsRef.current = reviewWs;
 
   /** Sesiones que pasaron de trabajando a terminadas: pulso en la lista y aviso. */
   function noteFinished(sessionsNow) {
@@ -495,6 +518,119 @@ export function App({ client, port, agents, models = {} }) {
     }
   }
 
+  function refreshReviewInbox(ws = reviewWsRef.current) {
+    if (!ws) return [];
+    const { items } = loadReviewInbox(ws);
+    setReviewItems(items);
+    reviewItemsRef.current = items;
+    const at = Math.min(reviewIndexRef.current, Math.max(0, items.length - 1));
+    setReviewIndex(at);
+    reviewIndexRef.current = at;
+    return items;
+  }
+
+  function openReviewInbox() {
+    const session = selectedSession();
+    const ws = reviewWorkspace(session, board);
+    setReviewWs(ws);
+    reviewWsRef.current = ws;
+    const { items } = loadReviewInbox(ws);
+    setReviewItems(items);
+    reviewItemsRef.current = items;
+    setReviewIndex(0);
+    reviewIndexRef.current = 0;
+    setReviewDetail([]);
+    setMode('review');
+  }
+
+  function reviewSelectedItem() {
+    const items = reviewItemsRef.current;
+    const at = reviewIndexRef.current;
+    return items[at] || null;
+  }
+
+  function runReviewBanner(kind, err, res) {
+    const banner = err ? reviewBannerFromError(err) : reviewBannerFromResult(kind, res);
+    const color = { red: 'red', yellow: 'yellow', green: 'green' }[banner.color] || banner.color;
+    setBanner({ text: banner.text, color });
+    if (banner.refresh) refreshReviewInbox();
+    else if (banner.staleCard) refreshReviewInbox();
+  }
+
+  function approveReviewItem() {
+    const item = reviewSelectedItem();
+    const ws = reviewWsRef.current;
+    if (!item || !ws) {
+      setBanner({ text: 'No hay ficha seleccionada.', color: 'red' });
+      return;
+    }
+    if (String(item.id).startsWith('wave:')) {
+      setBanner({ text: 'Las fichas de oleada no se aprueban desde aquí.', color: 'yellow' });
+      return;
+    }
+    try {
+      const svc = createReviewService(ws, { actor: 'human' });
+      const res = svc.approve(item.id, { version: item.version });
+      runReviewBanner('Aprobación', null, res);
+    } catch (err) {
+      runReviewBanner('Aprobación', err);
+    }
+  }
+
+  function discardReviewItem() {
+    const item = reviewSelectedItem();
+    const ws = reviewWsRef.current;
+    if (!item || !ws) {
+      setBanner({ text: 'No hay ficha seleccionada.', color: 'red' });
+      return;
+    }
+    if (String(item.id).startsWith('wave:')) {
+      setBanner({ text: 'Las fichas de oleada no se descartan desde aquí.', color: 'yellow' });
+      return;
+    }
+    try {
+      const svc = createReviewService(ws, { actor: 'human' });
+      const res = svc.discard(item.id, { version: item.version });
+      runReviewBanner('Descarte', null, res);
+    } catch (err) {
+      runReviewBanner('Descarte', err);
+    }
+  }
+
+  async function submitRejectNote() {
+    const item = reviewSelectedItem();
+    const ws = reviewWsRef.current;
+    const text = fieldRef.current.trim();
+    setField('');
+    setMode('review');
+    if (!item || !ws) {
+      setBanner({ text: 'No hay ficha seleccionada.', color: 'red' });
+      return;
+    }
+    if (!text) {
+      setBanner({ text: 'Rechazar requiere una nota.', color: 'red' });
+      return;
+    }
+    try {
+      const svc = createReviewService(ws, { actor: 'human', callHub: createHubCallAdapter(client) });
+      const res = await svc.reject(item.id, text, { version: item.version });
+      runReviewBanner('Rechazo', null, res);
+    } catch (err) {
+      runReviewBanner('Rechazo', err);
+    }
+  }
+
+  function openReviewDetail() {
+    const item = reviewSelectedItem();
+    const ws = reviewWsRef.current;
+    if (!item || !ws) {
+      setBanner({ text: 'No hay ficha seleccionada.', color: 'red' });
+      return;
+    }
+    setReviewDetail(reviewDetailLines(ws, item));
+    setMode('review-detail');
+  }
+
   async function submitField() {
     const text = fieldRef.current.trim();
     const id = selectedIdRef.current;
@@ -534,6 +670,79 @@ export function App({ client, port, agents, models = {} }) {
   useInput((input, key) => {
     const currentMode = modeRef.current;
     const currentWizard = wizardRef.current;
+
+    if (currentMode === 'review-detail') {
+      if (key.escape || key.return) setMode('review');
+      return;
+    }
+    if (currentMode === 'review-reject') {
+      if (key.escape) {
+        setMode('review');
+        setField('');
+        return;
+      }
+      if (key.return) {
+        void submitRejectNote();
+        return;
+      }
+      if (key.backspace || key.delete) {
+        setField((value) => value.slice(0, -1));
+        return;
+      }
+      if (input && !key.ctrl && !key.meta) setField((value) => value + input);
+      return;
+    }
+    if (currentMode === 'review') {
+      if (key.escape || input === 'q') {
+        setMode('main');
+        return;
+      }
+      if (input === 'r') {
+        refreshReviewInbox();
+        setBanner({ text: 'Bandeja actualizada.', color: 'green' });
+        return;
+      }
+      if (key.upArrow) {
+        const next = Math.max(0, reviewIndexRef.current - 1);
+        reviewIndexRef.current = next;
+        setReviewIndex(next);
+        return;
+      }
+      if (key.downArrow) {
+        const last = Math.max(0, reviewItemsRef.current.length - 1);
+        const next = Math.min(last, reviewIndexRef.current + 1);
+        reviewIndexRef.current = next;
+        setReviewIndex(next);
+        return;
+      }
+      if (input === 'a') {
+        approveReviewItem();
+        return;
+      }
+      if (input === 'd') {
+        discardReviewItem();
+        return;
+      }
+      if (input === 'x') {
+        const item = reviewSelectedItem();
+        if (!item) {
+          setBanner({ text: 'No hay ficha seleccionada.', color: 'red' });
+          return;
+        }
+        if (String(item.id).startsWith('wave:')) {
+          setBanner({ text: 'Las fichas de oleada no se rechazan desde aquí.', color: 'yellow' });
+          return;
+        }
+        setField('');
+        setMode('review-reject');
+        return;
+      }
+      if (key.return) {
+        openReviewDetail();
+        return;
+      }
+      return;
+    }
 
     if (currentMode === 'help') {
       if (key.escape || input === '?' || input === 'q') setMode('main');
@@ -795,6 +1004,10 @@ export function App({ client, port, agents, models = {} }) {
       setMode('estado');
       return;
     }
+    if (input === 'r' && draftRef.current === '' && !key.ctrl) {
+      openReviewInbox();
+      return;
+    }
     if (input === 'n' && draftRef.current === '' && !key.ctrl) {
       if (!agents.length) {
         setBanner({ text: 'No hay agentes en agent-rack.config.json.', color: 'red' });
@@ -821,6 +1034,8 @@ export function App({ client, port, agents, models = {} }) {
   else if (mode === 'confirm' || mode === 'search') composerInner = 2;
   else if (wizard?.step === 'prompt') composerInner = 4;
   else if (mode === 'steer' || mode === 'note') composerInner = 2;
+  else if (mode === 'review' || mode === 'review-detail') composerInner = 1;
+  else if (mode === 'review-reject') composerInner = 2;
   const frame = frameLayout(rows, { composerInner });
   const composerH = frame.composer;
   const bodyH = frame.body;
@@ -837,7 +1052,11 @@ export function App({ client, port, agents, models = {} }) {
     ? renderEstado(h, Box, Text, { height: bodyH, columns, board })
     : mode === 'help'
       ? renderHelp(h, Box, Text, { height: bodyH, columns })
-      : h(
+      : mode === 'review-detail'
+        ? renderReviewDetail(h, Box, Text, { height: bodyH, columns, lines: reviewDetail })
+        : mode === 'review' || mode === 'review-reject'
+          ? renderReviewInbox(h, Box, Text, { height: bodyH, columns, items: reviewItems, index: reviewIndex })
+          : h(
         Box,
         { flexGrow: 1, height: bodyH, overflow: 'hidden' },
         listHidden ? null : renderSessionList(h, Box, Text, {
@@ -898,7 +1117,16 @@ export function App({ client, port, agents, models = {} }) {
       { height: frame.composer, borderStyle: 'single', borderColor: c(palette.rule), borderBottom: false, borderLeft: false, borderRight: false, paddingX: 1, flexDirection: 'column', overflow: 'hidden' },
       mode === 'estado'
         ? segLine(h, Text, [{ text: 'Estado del proyecto · e o esc vuelve', color: palette.muted }], 'estado')
-        : renderComposer(h, Box, Text, { mode, draft, field, wizard, agents, columns, selected, query, picker }),
+        : mode === 'review' || mode === 'review-detail'
+          ? reviewComposerLine(h, Text, mode, columns - 4)
+          : mode === 'review-reject'
+            ? h(
+              Box,
+              { flexDirection: 'column' },
+              reviewComposerLine(h, Text, mode, columns - 4),
+              segLine(h, Text, [{ text: '› ', color: palette.edge, bold: true }, { text: clip(field, columns - 6), color: palette.ink }, { text: '█', color: palette.edge }], 'rv-reject'),
+            )
+            : renderComposer(h, Box, Text, { mode, draft, field, wizard, agents, columns, selected, query, picker }),
     )
     : null;
   const bannerColor = { red: palette.bad, yellow: palette.run, green: palette.ok }[banner?.color] || banner?.color;
@@ -908,7 +1136,18 @@ export function App({ client, port, agents, models = {} }) {
       : h(Text, null, ' '))
     : null;
   const footer = frame.footer
-    ? h(Box, { height: frame.footer, overflow: 'hidden', paddingX: 1 }, segLine(h, Text, footerKeys(columns - 2), 'foot'))
+    ? h(
+      Box,
+      { height: frame.footer, overflow: 'hidden', paddingX: 1 },
+      segLine(
+        h,
+        Text,
+        mode === 'review' || mode === 'review-detail' || mode === 'review-reject'
+          ? reviewFooterKeys(columns - 2)
+          : footerKeys(columns - 2),
+        'foot',
+      ),
+    )
     : null;
 
   return h(
