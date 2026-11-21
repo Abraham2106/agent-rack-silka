@@ -32,6 +32,14 @@ export function validateApiArgs(path, args) {
       if (!list[0]) throw silkaError('E_POLICY', 'launch requiere un plan o tarea.');
       return list;
     }
+    case 'plan.fromFile':
+      return [assertString(list[0], 'path')];
+    case 'plan.fromList': {
+      if (!Array.isArray(list[0]) || !list[0].length) {
+        throw silkaError('E_POLICY', 'plan.fromList requiere un array de tareas.');
+      }
+      return list;
+    }
     case 'wait':
       return [assertString(list[0], 'sessionId'), list[1] || {}];
     case 'waitAll': {

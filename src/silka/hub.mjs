@@ -6,6 +6,7 @@ import { DashboardRemoteClient } from 'agent-rack/dist/cli/dashboard/remoteClien
 import { DEFAULT_SSE_PORT } from 'agent-rack/dist/config/schema.js';
 import { tokenFilePath } from 'agent-rack/dist/security/auth.js';
 import { startQueueDispatcher } from './dispatch.mjs';
+import { startTaskSupervisor } from './tasks/supervisor.mjs';
 import { withFileLock, writeAtomic } from './lock.mjs';
 import { signalProcessTree } from './proc.mjs';
 
@@ -180,14 +181,19 @@ export async function startHub() {
   }
   const bin = path.join(status.root, 'node_modules', 'agent-rack', 'bin', 'agent-rack.js');
   console.log(`Arrancando hub en http://127.0.0.1:${status.port}/sse`);
+  const connectHub = async (runtime) => {
+    const client = new DashboardRemoteClient(status.url, runtime.token);
+    await client.connect();
+    return client;
+  };
   const stopDispatch = startQueueDispatcher({
     port: status.port,
     readRuntime: () => readRuntime(status.port),
-    connect: async (runtime) => {
-      const client = new DashboardRemoteClient(status.url, runtime.token);
-      await client.connect();
-      return client;
-    },
+    connect: connectHub,
+  });
+  const stopTasks = startTaskSupervisor({
+    readRuntime: () => readRuntime(status.port),
+    connect: connectHub,
   });
   const child = spawn(process.execPath, [bin, 'start', '-t', 'sse', '-c', status.configPath], {
     cwd: status.root,
@@ -210,6 +216,7 @@ export async function startHub() {
     if (process.platform === 'win32') process.once('SIGBREAK', stop);
   });
   await stopDispatch();
+  await stopTasks();
 }
 
 export async function withClient(fn) {

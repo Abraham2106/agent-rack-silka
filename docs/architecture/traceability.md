@@ -27,16 +27,16 @@ Estados: `—` sin empezar · `Diseño` especificado · `Construcción` en curso
 | FR-CM-07 compatibilidad | ADR-0003 | Bridge | Regresión `npm test` + smoke | Entregado |
 | FR-CM-08 versión de la API | ADR-0003 | `silka.d.ts` | T-CM-01 | Entregado |
 | FR-CM-09 auditoría de ejecuciones | — | Bridge | T-SEC-08 | Entregado |
-| FR-TK-01 worktree por tarea | ADR-0005 | Gestor de tareas | T-TK-01 | Diseño |
-| FR-TK-02 validación de la tarea | — | Gestor de tareas | T-TK-01 | Diseño |
-| FR-TK-03 dependencias | — | Gestor de tareas | T-TK-02 | Diseño |
-| FR-TK-04 verify en el worktree | ADR-0005 | Gestor de tareas | T-TK-01 | Diseño |
-| FR-TK-05 ficha | ADR-0002 | Gestor de tareas | T-RV-05 | Diseño |
-| FR-TK-06 riesgo | — | Gestor de tareas | T-TK-03 | Diseño |
-| FR-TK-07 vida del worktree | ADR-0005 | Gestor de tareas | T-TK-05 | Diseño |
-| FR-TK-08 tope de simultaneidad | — | Gestor de tareas | T-CC-09 | Diseño |
-| FR-TK-09 puertos | — | Gestor de tareas | T-CC-09 (D-08) | Diseño |
-| FR-TK-10 fuera de scope | — | Gestor de tareas | T-TK-03 | Diseño |
+| FR-TK-01 worktree por tarea | ADR-0005 | Gestor de tareas | T-TK-01 | Entregado |
+| FR-TK-02 validación de la tarea | — | Gestor de tareas | T-TK-01 | Entregado |
+| FR-TK-03 dependencias | — | Gestor de tareas | T-TK-02 | Entregado |
+| FR-TK-04 verify en el worktree | ADR-0005 | Gestor de tareas | T-TK-01 | Entregado |
+| FR-TK-05 ficha | ADR-0002 | Gestor de tareas | T-RV-05 | Entregado |
+| FR-TK-06 riesgo | — | Gestor de tareas | T-TK-03 | Entregado |
+| FR-TK-07 vida del worktree | ADR-0005 | Gestor de tareas | T-TK-05 | Entregado |
+| FR-TK-08 tope de simultaneidad | — | Gestor de tareas | T-CC-09 | Entregado |
+| FR-TK-09 puertos | — | Gestor de tareas | T-CC-09 (D-08) | Entregado (comprobación de puerto libre simplificada) |
+| FR-TK-10 fuera de scope | — | Gestor de tareas | T-TK-03 | Entregado |
 | FR-RV-01…08 bandeja | ADR-0006 | Bandeja (hub, TUI) | T-RV-01…05 | Diseño |
 | FR-MQ-01 dueño único y fencing | ADR-0006, ADR-0007 | Cola de mezcla | T-MQ-03 | Diseño |
 | FR-MQ-02…05 pasos y fallos | ADR-0006 | Cola de mezcla | T-MQ-01, T-MQ-04 | Diseño |
@@ -56,8 +56,8 @@ Estados: `—` sin empezar · `Diseño` especificado · `Construcción` en curso
 | SEC-03 límites | TH-03 | T-SEC-06, 07 | Entregado (T-SEC-01…07 pasan) |
 | SEC-04 política por llamada | TH-04, TH-19 | T-CM-01 | Entregado (T-SEC-01…07 pasan) |
 | SEC-05 referencias opacas | TH-05 | T-CM-03 | Entregado (T-SEC-01…07 pasan) |
-| SEC-06 git sin hooks | TH-06 | T-TK-04 | Diseño |
-| SEC-07 verify declarado | TH-07 | T-TK-01 | Diseño |
+| SEC-06 git sin hooks | TH-06 | T-TK-04 | Entregado (hooks fuera del repo, purgados en cada uso; T-TK-04) |
+| SEC-07 verify declarado | TH-07 | T-TK-01 | Entregado (prueba explícita) |
 | SEC-08 humano en riesgo alto | TH-08, TH-09 | T-RV-03 | Diseño |
 | SEC-09 ficha como dato | TH-09, TH-10 | T-RV-04 | Diseño |
 | SEC-10 CAS en update-ref | TH-17 | T-MQ-05 | Diseño |
@@ -83,7 +83,7 @@ Estados: `—` sin empezar · `Diseño` especificado · `Construcción` en curso
 |---|---|---|---|
 | 1 | H1: correcciones de concurrencia | T-CC-01…06 pasan | Entregado (0 fallos en 8 corridas de estrés) |
 | 2 | F1: Code Mode | T-CM-*, T-SEC-01…07 pasan; NFR-TOK-01 medido | Entregado (49/49); medición real de tokens pendiente |
-| 3 | F2: tareas aisladas | T-TK-* pasan | — |
+| 3 | F2: tareas aisladas | T-TK-* pasan | Entregado (60/60; e2e con hub falso) |
 | 4 | F3: bandeja | T-RV-* pasan | — |
 | 5 | F4: cola de mezcla | T-MQ-*, T-CC-07 pasan | — |
 | 6 | F5: contexto y métricas | T-CX-*, T-ME-* pasan; línea base hecha (G4, G5) | — |

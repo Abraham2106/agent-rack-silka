@@ -143,7 +143,7 @@ test('API no implementada responde E_NOT_IMPLEMENTED', async () => {
     listSessions: async () => [],
   });
   await assert.rejects(
-    () => dispatch(['card'], ['sess-1']),
+    () => dispatch(['review', 'inbox'], []),
     (err) => err.code === 'E_NOT_IMPLEMENTED',
   );
 });

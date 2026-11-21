@@ -1,14 +1,15 @@
+import nodePath from 'node:path';
 import { cachedModels, loadModels } from '../models.mjs';
 import { isBusy } from '../format.mjs';
 import { matchSession } from '../commands.mjs';
+import { createTaskManager } from '../tasks/manager.mjs';
+import { planFromFile, planFromList } from '../tasks/plan.mjs';
+import { readTaskLogRef } from '../tasks/log-store.mjs';
 import { validateApiArgs } from './api-schema.mjs';
 import { silkaError } from './errors.mjs';
 import { getStoredRef } from './output-store.mjs';
 
 const NOT_IMPL = new Set([
-  'plan.fromFile',
-  'plan.fromList',
-  'card',
   'review.inbox',
   'review.approve',
   'review.reject',
@@ -60,12 +61,43 @@ export function createApiDispatcher(ctx) {
     const validated = validateApiArgs(path, args);
 
     if (method === 'get') {
-      return getStoredRef(validated[0]);
+      const ref = validated[0];
+      if (String(ref).startsWith('log:')) {
+        return readTaskLogRef(ref, ctx.workspace);
+      }
+      return getStoredRef(ref);
+    }
+
+    if (method === 'plan.fromFile') {
+      const ws = nodePath.resolve(ctx.workspace);
+      return planFromFile(validated[0], ws);
+    }
+
+    if (method === 'plan.fromList') {
+      return planFromList(validated[0]);
+    }
+
+    if (method === 'card') {
+      const mgr = createTaskManager(ctx.workspace);
+      return mgr.card(validated[0]);
     }
 
     if (method === 'launch') {
       const [planOrTask, opts = {}] = validated;
       const tasks = normalizeTasks(planOrTask);
+      if (opts.isolate === 'worktree') {
+        const ws = nodePath.resolve(opts.workspace || ctx.workspace);
+        const mgr = createTaskManager(ws, {
+          maxConcurrentTasks: opts.maxConcurrentTasks,
+          preferManual: false,
+        });
+        return mgr.launch(tasks, {
+          cause: 'codemode',
+          callHub: ctx.callHub,
+          defaultAgent: opts.agent,
+          defaultModel: opts.model,
+        });
+      }
       const launched = [];
       for (const task of tasks) {
         const prompt = taskPrompt(task);

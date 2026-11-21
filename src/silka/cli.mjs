@@ -22,6 +22,9 @@ function printHelp() {
   silka disconnect <claude|codex|cursor|opencode|all> [--dry-run]
   silka graph status [workspace]
   silka graph build [workspace]
+  silka task run <archivo-plan> [--workspace dir]
+  silka task ls [workspace]
+  silka task verify <id> [workspace]
 
 Sin hub, los comandos responden: corre: silka hub
 bridge es el MCP por stdio que comparte ese hub.
@@ -110,6 +113,43 @@ ${agent}  (${cat.models.length}${cat.total > cat.models.length ? ` de ${cat.tota
       if (!only && cat.models.length > 8) console.log(`  … ${cat.models.length - 8} más (silka models ${agent})`);
     }
     return;
+  }
+  if (cmd === 'task') {
+    const sub = argv[1];
+    const { taskRunFromFile, taskList, taskVerify } = await import('./tasks/cli.mjs');
+    const { parseArgs } = await import('./commands.mjs');
+    const { flags, positional } = parseArgs(argv.slice(2));
+    const workspace = flags.workspace || process.cwd();
+    if (sub === 'run') {
+      const planFile = positional[0];
+      if (!planFile) throw new Error('Uso: silka task run <archivo-plan> [--workspace dir]');
+      const { withClient } = await import('./hub.mjs');
+      const { createHubCallAdapter } = await import('./tasks/hub-call.mjs');
+      const { loadSilkaConfig } = await import('./hub.mjs');
+      await withClient(async (client) => {
+        const { agents, config } = loadSilkaConfig();
+        const def = agents[0] ? config.agents?.[agents[0]]?.model : '';
+        await taskRunFromFile(planFile, {
+          workspace,
+          callHub: createHubCallAdapter(client),
+          defaultAgent: agents[0] || 'codex',
+          defaultModel: def || '',
+        });
+      });
+      return;
+    }
+    if (sub === 'ls') {
+      taskList(positional[0] || workspace);
+      return;
+    }
+    if (sub === 'verify') {
+      const id = positional[0];
+      const ws = positional[1] || workspace;
+      if (!id) throw new Error('Uso: silka task verify <id> [workspace]');
+      taskVerify(id, ws);
+      return;
+    }
+    throw new Error('Uso: silka task run|ls|verify ...');
   }
   if (cmd === 'connect' || cmd === 'disconnect') {
     const { connectHarness, disconnectHarness } = await import('./connect.mjs');
