@@ -1,4 +1,4 @@
-import { markColor, silkaMarkCropped } from './logo.mjs';
+import { cellRatio, markGrid, renderMark, SILKA_PALETTE, trimGrid } from './logo.mjs';
 // Tema de Silka: todo el color del TUI sale de aquí.
 // Paleta tomada del logo (hachas acero + filo y anillo violeta). Ink/chalk degradan solos
 // a 256 o 16 colores según la terminal; aquí solo respetamos NO_COLOR y SILKA_NO_ANIM.
@@ -144,25 +144,8 @@ function logoShape(x, y, W, H) {
  * Logo en filas de segmentos para Ink: cada celda es '▀' con color arriba/abajo,
  * así cada carácter muestra 2 píxeles verticales (cuadrados).
  */
-export function logoRows(width = 24, env = process.env) {
-  // Silka Pixel Mark (rejilla 32×32 de la guía, recortada a la marca de 24u).
-  // Si se pide otro ancho se muestrea por vecino más cercano; 24 es el tamaño nativo.
-  const mark = silkaMarkCropped();
-  const W = width; const H = width;
-  const at = (x, y) => markColor(mark[Math.floor((y * 24) / H)]?.[Math.floor((x * 24) / W)]);
-  const rows = [];
-  for (let y = 0; y < H; y += 2) {
-    const segs = [];
-    for (let x = 0; x < W; x += 1) {
-      const top = at(x, y);
-      const bot = at(x, y + 1);
-      if (!colorOn(env)) segs.push({ text: top || bot ? '█' : ' ' });
-      else if (top && bot) segs.push({ text: '▀', color: top, backgroundColor: bot });
-      else if (top) segs.push({ text: '▀', color: top });
-      else if (bot) segs.push({ text: '▄', color: bot });
-      else segs.push({ text: ' ' });
-    }
-    rows.push(segs);
-  }
-  return rows;
+export function logoRows(width = 64, env = process.env) {
+  // 64×64 para el banner principal; 32×32 cuando no hay sitio. Paleta original de la marca.
+  const grid = trimGrid(markGrid(width >= 64 ? 64 : 32));
+  return renderMark(grid, { ratio: cellRatio(env), color: colorOn(env), colorOf: (name) => SILKA_PALETTE[name] });
 }

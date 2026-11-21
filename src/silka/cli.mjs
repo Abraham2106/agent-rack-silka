@@ -63,6 +63,16 @@ async function main() {
     }
     throw new Error('Uso: silka graph build|status [workspace]');
   }
+  if (cmd === 'logo') {
+    // Imprime la marca a tamaño real con color de 24 bits (para revisarla en tu terminal).
+    const { logoRows } = await import('./ui/theme.mjs');
+    const size = Number(argv[1]) === 32 ? 32 : 64;
+    const hex = (h) => { const n = Number.parseInt(h.slice(1), 16); return `${(n >> 16) & 255};${(n >> 8) & 255};${n & 255}`; };
+    for (const row of logoRows(size)) {
+      console.log(row.map((s) => (s.color ? `\x1b[38;2;${hex(s.color)}m` : '') + (s.backgroundColor ? `\x1b[48;2;${hex(s.backgroundColor)}m` : '') + s.text + '\x1b[0m').join(''));
+    }
+    return;
+  }
   if (cmd === 'models') {
     const { loadModels, setDefaultModel } = await import('./models.mjs');
     const { loadSilkaConfig } = await import('./hub.mjs');

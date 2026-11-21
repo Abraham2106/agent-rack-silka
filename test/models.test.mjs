@@ -62,24 +62,39 @@ test('tema: mezcla, degradado, brillo y logo', () => {
   assert.equal(seg[0].color, '#000000');
   assert.equal(seg[4].color, '#ffffff');
   assert.equal(shimmerSegments('Forjando…', 3).length, 9);
-  const rows = logoRows(16, {});
-  assert.equal(rows.length, 8);
-  assert.ok(rows.every((r) => r.length === 16));
+  const rows = logoRows(32, {});
+  assert.ok(rows.length >= 10 && rows.length <= 16);
+  assert.ok(rows.every((r) => r.length === rows[0].length));
   assert.ok(rows.flat().some((s) => s.text !== ' '));
-  assert.ok(logoRows(16, { NO_COLOR: '' }).flat().every((s) => !s.color)); // NO_COLOR: sin color
+  assert.ok(logoRows(32, { NO_COLOR: '' }).flat().every((s) => !s.color)); // NO_COLOR: sin color
 });
 
-test('Silka Pixel Mark: 32×32, marca de 24u con margen de 4u y simetría en espejo', async () => {
-  const { silkaMarkGrid, silkaMarkCropped } = await import('../src/silka/ui/logo.mjs');
-  const grid = silkaMarkGrid();
-  assert.equal(grid.length, 32);
-  assert.ok(grid.every((row) => row.length === 32));
-  for (const row of grid) for (let x = 0; x < 16; x += 1) assert.equal(row[x], row[31 - x]);
-  // margen libre de 4u arriba, a la izquierda y a la derecha
-  for (const y of [0, 1, 2, 3]) assert.ok(grid[y].every((p) => !p));
-  for (const row of grid) for (const x of [0, 1, 2, 31, 30, 29]) assert.equal(row[x], null);
-  // diamante central y anillo violeta presentes
-  assert.equal(grid[15][15], 'violetLight');
-  assert.ok(grid.flat().some((p) => p === 'violet'));
-  assert.equal(silkaMarkCropped().length, 24);
+test('Silka Pixel Mark: 64 y 32 desde el arte original, simétricas y con el diamante separado', async () => {
+  const { markGrid, renderMark, trimGrid } = await import('../src/silka/ui/logo.mjs');
+  for (const size of [64, 32]) {
+    const grid = markGrid(size);
+    assert.equal(grid.length, size);
+    assert.ok(grid.every((row) => row.length === size));
+    for (const row of grid) for (let x = 0; x < size / 2; x += 1) assert.equal(row[x], row[size - 1 - x]); // espejo exacto
+    const c = size / 2;
+    assert.ok(grid[c - 1][c - 1]?.startsWith('violet')); // diamante en el centro
+    // anillo de aire: justo fuera del diamante no hay acero (no se toca con los mangos)
+    let r = 0;
+    for (let y = 0; y < size; y += 1) for (let x = 0; x < size; x += 1) {
+      const d = Math.abs(x + 0.5 - c) + Math.abs(y + 0.5 - c);
+      if (d < size * 0.09 && grid[y][x]?.startsWith('violet')) r = Math.max(r, d);
+    }
+    for (let y = 0; y < size; y += 1) for (let x = 0; x < size; x += 1) {
+      const d = Math.abs(x + 0.5 - c) + Math.abs(y + 0.5 - c);
+      if (d > r && d <= r + 1) assert.equal(grid[y][x], null);
+    }
+    assert.ok(grid.flat().includes('violet') && grid.flat().includes('steel'));
+  }
+  // relación de aspecto: con celdas 1:2 cada carácter = 2 píxeles; con celdas más altas, menos filas
+  const g = trimGrid(markGrid(64));
+  assert.equal(renderMark(g, { ratio: 2 }).length, Math.ceil(g.length / 2));
+  assert.ok(renderMark(g, { ratio: 2.4 }).length < renderMark(g, { ratio: 2 }).length);
+  // sin suavizado: solo los colores de la paleta (o nada)
+  const colors = new Set(renderMark(g).flat().flatMap((s) => [s.color, s.backgroundColor]).filter(Boolean));
+  for (const col of colors) assert.ok(['#23232B', '#5B2ED9', '#7B3FF2', '#A855F7'].includes(col));
 });

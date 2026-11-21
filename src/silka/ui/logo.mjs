@@ -1,8 +1,11 @@
-// Silka Pixel Mark v1.0 — según la guía de construcción:
-//   rejilla 32×32 (1 módulo = 1u), marca 24u×24u, margen 4u, centro de simetría (16,16).
-//   Mangos de 3u a 45° y 135° · hojas ≈9u de ancho con curva exterior escalonada y filo
-//   violeta · anillo segmentado (4 arcos) de 2u detrás de las hachas · diamante central 2u.
-// Un hacha se define en coordenadas del mango (a lo largo / a través) y la otra es su espejo.
+// Silka Pixel Mark para la terminal.
+// Las rejillas salen del arte original (scripts/build-logo.mjs → logo-data.mjs):
+//   MARK_64 para el banner principal, MARK_32 para espacios reducidos.
+// Render con medio bloque (▀/▄): cada carácter muestra 2 píxeles verticales. Un píxel es
+// cuadrado solo si la celda mide exactamente 1:2; como no todas las fuentes lo cumplen,
+// se re-muestrea en vertical según la proporción real de la celda (SILKA_CELL_RATIO,
+// alto/ancho, por defecto 2.0). Sin suavizado: vecino más cercano, un color por píxel.
+import { MARK_32, MARK_64 } from './logo-data.mjs';
 
 export const SILKA_PALETTE = {
   void: '#0F0F14',
@@ -12,71 +15,58 @@ export const SILKA_PALETTE = {
   violetLight: '#A855F7',
 };
 
-// Variante "On dark (CLI)": el acero #23232B casi desaparece sobre fondo oscuro, se aclara.
-export const ON_DARK = { steel: '#4A4A58', steelShade: '#3A3A46' };
+const CODE = { '#': 'steel', o: 'violet', O: 'violetMid', '@': 'violetLight' };
 
-const N = 32;
-const C = 16;
-const S = Math.SQRT1_2;
-
-/** Hacha A: cabeza arriba-izquierda, mango hacia abajo-derecha. Devuelve un nombre de color o null. */
-function axe(px, py) {
-  const dx = px - C;
-  const dy = py - C;
-  const a = (dx + dy) * S;  // a lo largo del mango: negativo = hacia la cabeza
-  const c = (dx - dy) * S;  // a través: negativo = abajo-izquierda (lado de la hoja)
-  // Hoja: media elipse del lado de la hoja, con la curva exterior escalonada (≈9u de ancho).
-  const e = ((a + 8.4) / 5.3) ** 2 + ((c + 0.2) / 8.6) ** 2;
-  const bite = Math.hypot(a + 4.2, c + 4.9) < 3.7; // escotadura interior junto al mango
-  if (c < 0.2 && a < -3 && e <= 1 && !bite) {
-    if (e > 0.62) return e > 0.84 ? 'violetLight' : 'violetMid'; // filo de ~2px
-    return c < -6.2 ? 'steelShade' : 'steel';
-  }
-  // Espolón superior (talón de la cabeza) del otro lado del mango, afinándose hacia arriba.
-  if (c >= 0.2 && c < 3.6 && a > -14.2 && a < -9.6 && c < 3.6 - (-9.6 - a) * 0.55) return 'steel';
-  // Mango de 3u.
-  if (Math.abs(c) < 1.6 && a > -12.4 && a < 16.2) return 'steel';
-  return null;
+function parse(rows) {
+  return rows.map((line) => [...line].map((ch) => CODE[ch] || null));
 }
 
-/** Anillo de 2u en 4 arcos (arriba, abajo, izquierda, derecha), cortado en las diagonales. */
-function ring(px, py) {
-  const r = Math.hypot(px - C, py - C);
-  if (r < 6.2 || r > 8.3) return null;
-  const deg = ((Math.atan2(py - C, px - C) * 180) / Math.PI + 360) % 360;
-  for (const center of [0, 90, 180, 270]) {
-    const d = Math.abs(((deg - center + 540) % 360) - 180);
-    if (d < 27) return center === 270 ? 'violetMid' : 'violet';
-  }
-  return null;
+/** Rejilla lógica (64 o 32) como matriz de nombres de color. */
+export function markGrid(size = 64) {
+  return parse(size >= 64 ? MARK_64 : MARK_32);
 }
 
-/** Mapa 32×32 de nombres de color (o null). */
-export function silkaMarkGrid() {
-  const grid = [];
-  for (let y = 0; y < N; y += 1) {
-    const row = [];
-    for (let x = 0; x < N; x += 1) {
-      const px = x + 0.5;
-      const py = y + 0.5;
-      const body = axe(px, py) || axe(N - px, py); // espejo exacto respecto de x = 16
-      let pixel = ring(px, py);
-      if (body) pixel = body;
-      if (Math.abs(px - C) + Math.abs(py - C) <= 2.05) pixel = 'violetLight'; // diamante 2u
-      row.push(pixel);
+/** Quita filas y columnas vacías alrededor (la marca es más ancha que alta). */
+export function trimGrid(grid) {
+  const used = (row) => row.some(Boolean);
+  let top = 0; let bottom = grid.length - 1;
+  while (top < bottom && !used(grid[top])) top += 1;
+  while (bottom > top && !used(grid[bottom])) bottom -= 1;
+  const rows = grid.slice(top, bottom + 1);
+  let left = rows[0].length; let right = 0;
+  for (const row of rows) row.forEach((p, x) => { if (p) { left = Math.min(left, x); right = Math.max(right, x); } });
+  return rows.map((row) => row.slice(left, right + 1));
+}
+
+/** Proporción alto/ancho de la celda de la terminal. */
+export function cellRatio(env = process.env) {
+  const v = Number(env.SILKA_CELL_RATIO);
+  return Number.isFinite(v) && v >= 1.2 && v <= 3 ? v : 2;
+}
+
+/**
+ * Filas de segmentos {text,color,backgroundColor} listas para Ink.
+ * `colorOf(name)` decide el color final de cada píxel.
+ */
+export function renderMark(grid, { ratio = 2, colorOf = (n) => SILKA_PALETTE[n], color = true } = {}) {
+  const H = grid.length; const W = grid[0]?.length || 0;
+  // sub-píxeles verticales para que cada píxel lógico se vea cuadrado con esta celda
+  const sub = Math.max(2, Math.round((H * 2) / ratio));
+  const src = (j) => grid[Math.min(H - 1, Math.floor((j * ratio) / 2))];
+  const rows = [];
+  for (let j = 0; j < sub; j += 2) {
+    const up = src(j); const down = j + 1 < sub ? src(j + 1) : null;
+    const segs = [];
+    for (let x = 0; x < W; x += 1) {
+      const t = up?.[x] ? colorOf(up[x]) : null;
+      const b = down?.[x] ? colorOf(down[x]) : null;
+      if (!color) segs.push({ text: t || b ? '█' : ' ' });
+      else if (t && b) segs.push(t === b ? { text: '█', color: t } : { text: '▀', color: t, backgroundColor: b });
+      else if (t) segs.push({ text: '▀', color: t });
+      else if (b) segs.push({ text: '▄', color: b });
+      else segs.push({ text: ' ' });
     }
-    grid.push(row);
+    rows.push(segs);
   }
-  return grid;
-}
-
-/** Recorta al cuadro de la marca (24u), sin el margen de 4u. */
-export function silkaMarkCropped() {
-  return silkaMarkGrid().slice(4, 28).map((row) => row.slice(4, 28));
-}
-
-/** Color real de cada nombre para fondo oscuro (CLI). */
-export function markColor(name) {
-  if (!name) return null;
-  return ON_DARK[name] || SILKA_PALETTE[name] || null;
+  return rows;
 }

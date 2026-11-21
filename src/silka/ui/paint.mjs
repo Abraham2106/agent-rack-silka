@@ -23,10 +23,10 @@ export function wordmark(text = 'silka') {
 
 /** Pantalla de bienvenida / estado vacío: logo grande + nombre + qué hacer. */
 export function renderSplash(h, Box, Text, { width, height, hint }) {
-  const logoW = width >= 60 && height >= 18 ? 26 : width >= 40 && height >= 12 ? 16 : 0;
+  const logoW = width >= 70 && height >= 32 ? 64 : width >= 40 && height >= 18 ? 32 : 0;
   const rows = logoW ? logoRows(logoW) : [];
   const pad = (n) => ' '.repeat(Math.max(0, n));
-  const left = Math.floor((width - (logoW || 20)) / 2);
+  const left = Math.floor((width - (rows[0]?.length || 20)) / 2);
   const lines = [
     ...rows.map((segs, i) => segLine(h, Text, [{ text: pad(left) }, ...segs], `l${i}`)),
     h(Text, { key: 'gap1' }, ' '),
