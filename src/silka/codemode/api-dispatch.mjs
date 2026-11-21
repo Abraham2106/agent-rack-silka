@@ -13,6 +13,7 @@ import { silkaError } from './errors.mjs';
 import { getStoredRef } from './output-store.mjs';
 import { getContextRef } from '../context/ref-store.mjs';
 import { aggregateAgentStats } from '../metrics/stats.mjs';
+import { enrichWaitCard } from './wait-result.mjs';
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -30,6 +31,20 @@ function parseJson(text) {
   } catch {
     return text;
   }
+}
+
+async function sessionLogEvents(callHub, sessionId) {
+  try {
+    const page = parseJson(hubText(await callHub('agent_session_logs', { sessionId, tail: 2000 })));
+    return Array.isArray(page?.events) ? page.events : [];
+  } catch {
+    return [];
+  }
+}
+
+async function finishWaitCard(ctx, sessionId, card) {
+  const events = await sessionLogEvents(ctx.callHub, sessionId);
+  return enrichWaitCard(card, events);
 }
 
 function normalizeTasks(planOrTask) {
@@ -127,7 +142,7 @@ export function createApiDispatcher(ctx) {
       const started = Date.now();
       while (Date.now() - started < timeoutMs) {
         const card = await dispatchApi(['status'], [sessionId]);
-        if (!isBusy(card?.status)) return card;
+        if (!isBusy(card?.status)) return finishWaitCard(ctx, sessionId, card);
         await sleep(1500);
       }
       throw silkaError('E_LIMIT', 'Tiempo de espera agotado en wait.', { limit: 'timeoutSeconds', value: opts.timeoutSeconds || 900 });
@@ -150,7 +165,8 @@ export function createApiDispatcher(ctx) {
       if (pending.size) {
         throw silkaError('E_LIMIT', 'Tiempo de espera agotado en waitAll.', { limit: 'timeoutSeconds', value: opts.timeoutSeconds || 900 });
       }
-      return ids.map((id) => out.get(String(id)));
+      const cards = await Promise.all(ids.map((id) => finishWaitCard(ctx, String(id), out.get(String(id)))));
+      return cards;
     }
 
     if (method === 'send') {

@@ -9,6 +9,10 @@ import { SandboxRunner, runSandboxSnippet } from '../src/silka/codemode/runner.m
 import { searchSignatures } from '../src/silka/codemode/search.mjs';
 import { isSilkaError } from '../src/silka/codemode/errors.mjs';
 import { measureNfrTok01 } from '../src/silka/codemode/token-metrics.mjs';
+import {
+  eventsForTurn,
+  lastAgentMessageFromEvents,
+} from '../src/silka/codemode/wait-result.mjs';
 
 async function expectDenied(code) {
   try {
@@ -144,6 +148,98 @@ test('merge.queue expone la cola (F4)', async () => {
   });
   const queue = await dispatch(['merge', 'queue'], []);
   assert.ok(Array.isArray(queue));
+});
+
+function fakeHubWithLogs(sessions) {
+  return async (name, args = {}) => {
+    const id = args.sessionId;
+    const session = sessions.get(id);
+    if (name === 'agent_session_status' && session) {
+      return { content: [{ type: 'text', text: JSON.stringify(session.card) }] };
+    }
+    if (name === 'agent_session_logs' && session) {
+      return { content: [{ type: 'text', text: JSON.stringify({ events: session.events }) }] };
+    }
+    return { content: [{ type: 'text', text: '{}' }] };
+  };
+}
+
+test('wait: primer turno con lastMessage desde eventos', async () => {
+  const sessions = new Map([['s1', {
+    card: { sessionId: 's1', status: 'completed', turnCount: 1 },
+    events: [
+      { type: 'status', content: '→ read a.mjs', metadata: { stream: 'stderr' } },
+      { type: 'text', content: 'Listo: hay 3 archivos.', metadata: { type: 'result' } },
+    ],
+  }]]);
+  const dispatch = createApiDispatcher({
+    workspace: os.tmpdir(),
+    callHub: fakeHubWithLogs(sessions),
+    callBridgeTool: async () => '',
+    listSessions: async () => [],
+  });
+  const card = await dispatch(['wait'], ['s1', { timeoutSeconds: 1 }]);
+  assert.equal(card.turn, 1);
+  assert.equal(card.lastMessage, 'Listo: hay 3 archivos.');
+  assert.equal(card.noText, false);
+});
+
+test('wait: turno reanudado solo usa el mensaje del turno actual', async () => {
+  const turn1 = { type: 'text', content: 'Respuesta del turno uno.', metadata: { type: 'result' } };
+  const turn2 = [
+    { type: 'status', content: '→ $ npm test', metadata: { stream: 'stderr' } },
+    { type: 'text', content: 'Tests verdes.', metadata: { type: 'result' } },
+  ];
+  const sessions = new Map([['s2', {
+    card: { sessionId: 's2', status: 'completed', turnCount: 2 },
+    events: [turn1, ...turn2],
+  }]]);
+  const dispatch = createApiDispatcher({
+    workspace: os.tmpdir(),
+    callHub: fakeHubWithLogs(sessions),
+    callBridgeTool: async () => '',
+    listSessions: async () => [],
+  });
+  const card = await dispatch(['wait'], ['s2', { timeoutSeconds: 1 }]);
+  assert.equal(card.turn, 2);
+  assert.equal(card.lastMessage, 'Tests verdes.');
+  assert.notEqual(card.lastMessage, 'Respuesta del turno uno.');
+});
+
+test('wait: turno sin texto expone noText', async () => {
+  const sessions = new Map([['s3', {
+    card: { sessionId: 's3', status: 'completed', turnCount: 1 },
+    events: [{ type: 'status', content: '→ $ npm test', metadata: { stream: 'stderr' } }],
+  }]]);
+  const dispatch = createApiDispatcher({
+    workspace: os.tmpdir(),
+    callHub: fakeHubWithLogs(sessions),
+    callBridgeTool: async () => '',
+    listSessions: async () => [],
+  });
+  const card = await dispatch(['wait'], ['s3', { timeoutSeconds: 1 }]);
+  assert.equal(card.lastMessage, '');
+  assert.equal(card.noText, true);
+});
+
+test('lastMessage une deltas ✎ de Cursor fragmentados', () => {
+  const events = [
+    { type: 'status', content: '✎ Hola mun', metadata: { stream: 'stderr' } },
+    { type: 'status', content: '✎ do desde', metadata: { stream: 'stderr' } },
+    { type: 'status', content: '✎ Cursor.', metadata: { stream: 'stderr' } },
+  ];
+  const { lastMessage, noText } = lastAgentMessageFromEvents(events, 1);
+  assert.equal(noText, false);
+  assert.match(lastMessage.replace(/\s+/g, ' '), /Hola mundo desde Cursor/);
+});
+
+test('eventsForTurn corta tras el result del turno anterior', () => {
+  const events = [
+    { type: 'text', content: 'uno', metadata: { type: 'result' } },
+    { type: 'text', content: 'dos', metadata: { type: 'result' } },
+  ];
+  assert.equal(eventsForTurn(events, 2).length, 1);
+  assert.equal(eventsForTurn(events, 2)[0].content, 'dos');
 });
 
 test('agents.stats ya no está sin implementar', async () => {

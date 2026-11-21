@@ -8,6 +8,7 @@ import {
   finishCursor,
   finishOpencode,
   normalizeCodexArgs,
+  onCursorEvent,
   parseShimArgs,
   redactSecrets,
 } from '../shims/agent-shim.mjs';
@@ -79,6 +80,16 @@ test('el resultado se recorta y no pega el stream', () => {
   assert.equal(opencode.is_error, true);
   assert.equal(opencode.result, "modelo 'modelo-que-no-existe-e2e' no existe para opencode");
   assert.equal(clarifyErrorText('codex', 'gpt-no', 'error'), "modelo 'gpt-no' no existe para codex");
+});
+
+test('finishCursor usa texto acumulado si no hay result JSON', () => {
+  const state = { acc: 'Respuesta par', at: 0, result: undefined, session_id: 's', is_error: false };
+  for (const delta of ['cial ', 'en fragmentos.']) {
+    onCursorEvent({ type: 'assistant', text: state.acc + delta }, state);
+  }
+  const out = finishCursor(state, '\n', '', '');
+  assert.equal(out.is_error, false);
+  assert.match(out.result, /Respuesta parcial en fragmentos/);
 });
 
 test('redactSecrets tapa tokens', () => {

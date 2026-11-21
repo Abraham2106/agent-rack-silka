@@ -475,7 +475,10 @@ export function capResult(text) {
 }
 
 export function finishCursor(state, stdout, err, model = '') {
-  const result = typeof state.result === 'string' ? state.result : scanCursorResult(stdout);
+  const acc = String(state.acc || '').replace(/\s+/g, ' ').trim();
+  const result = typeof state.result === 'string' && state.result.trim()
+    ? state.result
+    : (scanCursorResult(stdout) || acc);
   if (!result) {
     const last = String(err || '').split(/\n/).map((line) => line.trim()).filter(Boolean).at(-1) || '';
     return {

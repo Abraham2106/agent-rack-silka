@@ -1,5 +1,5 @@
 /**
- * Silka Code Mode API v1.2.0 (compatible con 1.0.x y 1.1.x)
+ * Silka Code Mode API v1.3.0 (compatible con 1.0.x, 1.1.x y 1.2.x)
  * @module silka
  */
 
@@ -86,6 +86,12 @@ export interface SessionCard {
   agentId?: string;
   summary?: string;
   workspace?: string;
+  /** Número de turno completado o en curso (desde el hub). */
+  turn?: number;
+  /** Último texto del agente en ese turno (desde eventos de sesión). */
+  lastMessage?: string;
+  /** true si el turno terminó sin texto del agente. */
+  noText?: boolean;
 }
 
 export interface StateSummary {
