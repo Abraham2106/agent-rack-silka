@@ -10,6 +10,9 @@ import { createTaskManager } from '../src/silka/tasks/manager.mjs';
 import { lockfileHash } from '../src/silka/tasks/setup.mjs';
 import { STATES } from '../src/silka/tasks/states.mjs';
 import { isValidWorktree, worktreePath } from '../src/silka/tasks/worktree.mjs';
+import { mutateTaskStore } from '../src/silka/tasks/store.mjs';
+
+const mutate = (repo, id, fn) => mutateTaskStore(repo, (store) => { const row = store.tasks.find((t) => t.id === id); if (row) fn(row); return store; });
 
 const OK = 'node -e "process.exit(0)"';
 const FAIL = 'node -e "process.exit(1)"';
@@ -145,4 +148,36 @@ test('WG-07 verify no repite el setup si el lockfile no cambió, y sí si cambi�
   mgr.setSessionAlive('tk-lock', false);
   mgr.verifyTask('tk-lock');
   assert.equal(counter(wt), 2, 'lockfile cambiado: se repite el setup');
+});
+
+test('WG-08 una sesión recién creada no se toma por terminada en el mismo ciclo del supervisor', async () => {
+  const { superviseTasksOnce } = await import('../src/silka/tasks/supervisor.mjs');
+  const repo = initRepo();
+  const sessions = new Map();
+  const client = {
+    async createSession(agent, prompt, workspace) {
+      const sessionId = `ses-${sessions.size + 1}`;
+      sessions.set(sessionId, { sessionId, status: 'running', workspace, agentId: agent });
+      return { sessionId, status: 'running', agentId: agent };
+    },
+    async listSessions() { return [...sessions.values()]; },
+    async getSessionStatus(id) { return sessions.get(id) || { sessionId: id, status: 'completed' }; },
+    async close() {},
+  };
+  const mgr = createTaskManager(repo);
+  await mgr.launch([{ id: 'tk-race2', title: 't', scope: 'src/', deliver: 'x', verify: OK }], { manual: true });
+  mutate(repo, 'tk-race2', (row) => { row.awaitingHubSession = true; });
+  await superviseTasksOnce(client, { repoRoots: [repo] });
+  const row = mgr.list().find((t) => t.id === 'tk-race2');
+  assert.equal(row.state, STATES.TRABAJANDO, 'el agente sigue trabajando; no se verifica todavía');
+  assert.ok(!row.card, 'sin ficha prematura');
+});
+
+test('WG-09 una tarea atrapada en verificando se puede descartar', async () => {
+  const repo = initRepo();
+  const mgr = createTaskManager(repo);
+  await mgr.launch([{ id: 'tk-stuck', title: 't', scope: 'src/', deliver: 'x', verify: OK }], { manual: true });
+  mutate(repo, 'tk-stuck', (row) => { row.state = STATES.VERIFICANDO; });
+  mgr.transition('tk-stuck', STATES.DESCARTADA, 'verify_interrumpido');
+  assert.equal(mgr.list().find((t) => t.id === 'tk-stuck').state, STATES.DESCARTADA);
 });

@@ -26,8 +26,7 @@ function repoRootsToWatch() {
 
 export async function superviseTasksOnce(client, { repoRoots, defaultAgent = 'codex', defaultModel = '', log = () => {} } = {}) {
   const callHub = createHubCallAdapter(client);
-  const sessions = await client.listSessions();
-  const byId = new Map(sessions.map((s) => [s.sessionId, s]));
+  let byId = new Map((await client.listSessions()).map((s) => [s.sessionId, s]));
   let n = 0;
   for (const repoRoot of repoRoots?.length ? repoRoots : repoRootsToWatch()) {
     let mgr;
@@ -37,7 +36,14 @@ export async function superviseTasksOnce(client, { repoRoots, defaultAgent = 'co
       // eslint-disable-next-line no-await-in-loop
       const started = await mgr.startPendingSessions({ callHub, defaultAgent, defaultModel, log });
       n += started.length;
-      if (started.length) log(`[silka] sesiones arrancadas en ${repoRoot}: ${started.join(", ")}`);
+      if (started.length) {
+        log(`[silka] sesiones arrancadas en ${repoRoot}: ${started.join(", ")}`);
+        // Las sesiones recién creadas no estaban en la lista tomada al inicio del ciclo: sin
+        // volver a pedirla, el supervisor las creía terminadas y verificaba la tarea en el
+        // mismo instante en que el agente empezaba.
+        // eslint-disable-next-line no-await-in-loop
+        byId = new Map((await client.listSessions()).map((s) => [s.sessionId, s]));
+      }
     } catch (err) {
       // Un repo con problemas no frena a los demás.
       log(`[silka] supervisor (${repoRoot}): ${err instanceof Error ? err.message : String(err)}`);
