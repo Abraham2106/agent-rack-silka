@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import { silkaError } from '../codemode/errors.mjs';
-import { appendMetric } from '../metrics/record.mjs';
+import { recordMergeMetricForTask } from '../metrics/task-close.mjs';
 import { createTaskManager } from '../tasks/manager.mjs';
 import { getTask, mutateTaskStore } from '../tasks/store.mjs';
 import { STATES } from '../tasks/states.mjs';
@@ -40,6 +40,10 @@ async function sendRepairMessage(callHub, task, text) {
   await callHub('agent_session_send', { sessionId: task.sessionId, message: text });
 }
 
+function noteMergeBroken(repoRoot, taskId, verify = null) {
+  recordMergeMetricForTask(repoRoot, taskId, { mergeBroke: true, verify });
+}
+
 export async function mergeOneTask(repoRoot, taskId, { fencingToken, callHub, verifyTimeoutMs } = {}) {
   assertFencing(repoRoot, fencingToken);
   const mgr = createTaskManager(repoRoot, { verifyTimeoutMs, preferManual: true });
@@ -68,6 +72,7 @@ export async function mergeOneTask(repoRoot, taskId, { fencingToken, callHub, ve
     clearMergeRuntime(repoRoot);
     const detail = formatMergeError('commit', { stderr: delivery.stderr });
     mgr.failMerge(taskId, detail, { callHub });
+    noteMergeBroken(repoRoot, taskId);
     return { repaired: true, detail };
   }
 
@@ -104,6 +109,7 @@ export async function mergeOneTask(repoRoot, taskId, { fencingToken, callHub, ve
     });
     const text = JSON.stringify(detail, null, 2);
     mgr.failMerge(taskId, detail, { callHub });
+    noteMergeBroken(repoRoot, taskId);
     await sendRepairMessage(callHub, getTask(repoRoot, taskId), text);
     return { repaired: true, detail };
   }
@@ -119,6 +125,7 @@ export async function mergeOneTask(repoRoot, taskId, { fencingToken, callHub, ve
     clearMergeRuntime(repoRoot);
     const detail = formatMergeError('setup', { log: setupRes.log || 'setup falló' });
     mgr.failMerge(taskId, detail, { callHub });
+    noteMergeBroken(repoRoot, taskId);
     return { repaired: true, detail };
   }
 
@@ -137,6 +144,7 @@ export async function mergeOneTask(repoRoot, taskId, { fencingToken, callHub, ve
     clearMergeRuntime(repoRoot);
     const detail = formatMergeError('verify', { log });
     mgr.failMerge(taskId, detail, { callHub });
+    noteMergeBroken(repoRoot, taskId, false);
     await sendRepairMessage(callHub, getTask(repoRoot, taskId), log);
     return { repaired: true, detail };
   }
@@ -182,6 +190,7 @@ export async function mergeOneTask(repoRoot, taskId, { fencingToken, callHub, ve
         clearMergeRuntime(repoRoot);
         const detail = formatMergeError('rebase', { paths: retryRebase.paths, stderr: retryRebase.stderr });
         mgr.failMerge(taskId, detail, { callHub });
+        noteMergeBroken(repoRoot, taskId);
         return { repaired: true, detail };
       }
       const newDest = refSha(repoRoot, dest);
@@ -203,6 +212,7 @@ export async function mergeOneTask(repoRoot, taskId, { fencingToken, callHub, ve
     clearMergeRuntime(repoRoot);
     const detail = formatMergeError('cas', { stderr: cas.stderr });
     mgr.failMerge(taskId, detail, { callHub });
+    noteMergeBroken(repoRoot, taskId);
     return { repaired: true, detail };
   }
 
@@ -217,17 +227,7 @@ export async function mergeOneTask(repoRoot, taskId, { fencingToken, callHub, ve
   mgr.completeMerge(taskId);
   // eslint-disable-next-line no-await-in-loop
   const integration = await afterTaskMerged(repoRoot, taskId, { callHub, verifyTimeoutMs });
-  appendMetric(repoRoot, {
-    id: taskId,
-    agent: task.agent || 'desconocido',
-    model: task.model,
-    mergeBroke: false,
-    verify: true,
-    firstPass: task.card?.verifyOk !== false,
-    durationMs: null,
-    turns: null,
-    sources: { mergeBroke: 'cola_mezcla' },
-  });
+  recordMergeMetricForTask(repoRoot, taskId, { mergeBroke: false, verify: true });
   return { merged: true, commit: newTip, integration };
 }
 

@@ -19,6 +19,7 @@ import { createTaskWorktree, isValidWorktree, removeTaskWorktree } from './workt
 import { assertVerifyDeclared, runVerifyWithEvidence } from './verify.mjs';
 import { lockfileHash, runSetupWithEvidence, setupForTask } from './setup.mjs';
 import { integrationBlockedReason } from '../integration/runner.mjs';
+import { recordDeliveryMetricIfClosed } from '../metrics/task-close.mjs';
 
 function nowIso() {
   return new Date().toISOString();
@@ -286,6 +287,7 @@ export class TaskManager {
       recordTransition(row, STATES.VERIFICACION_FALLIDA, 'setup_fallido');
       return store;
     });
+    recordDeliveryMetricIfClosed(this.repoRoot, taskId);
     return false;
   }
 
@@ -529,6 +531,7 @@ export class TaskManager {
       }
       return store;
     });
+    recordDeliveryMetricIfClosed(this.repoRoot, taskId);
     return card;
   }
 
