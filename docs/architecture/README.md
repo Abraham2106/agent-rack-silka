@@ -21,7 +21,7 @@ Punto de entrada a la documentación de diseño. Cada funcionalidad avanza por e
 
 | ID | Funcionalidad | Spec | Estado | Commit |
 |---|---|---|---|---|
-| F1 | Delegación en lote vía Code Mode (`silka_search` / `silka_execute`) | [F1](../specs/features/F1-code-mode.md) | Spec escrita, pendiente de aprobación | — |
+| F1 | Delegación en lote vía Code Mode (`silka_search` / `silka_execute`) | [F1](../specs/features/F1-code-mode.md) | Entregado (medición real de tokens pendiente) | ver git log "feat(F1)" |
 | F2 | Tareas aisladas (worktree), verificación y fichas de entrega | [F2](../specs/features/F2-tareas-aisladas.md) | Spec escrita, pendiente de aprobación | — |
 | F3 | Bandeja de revisión | [F3](../specs/features/F3-bandeja-revision.md) | Spec escrita, pendiente de aprobación | — |
 | F4 | Cola de mezcla con re-verificación | [F4](../specs/features/F4-cola-mezcla.md) | Spec escrita, pendiente de aprobación | — |

@@ -13,6 +13,14 @@ import { matchSession, sendToSession } from './commands.mjs';
 import { linkSessionToStartingTurn } from './interrupt.mjs';
 import { originLabel, readOrigins, rememberOrigin } from './origin.mjs';
 import { appendDecision, formatBlock, formatChanges, formatDecisions, samePath } from './state.mjs';
+import {
+  CODE_MODE_TOOLS,
+  executeCodeMode,
+  measureNfrTok01,
+  searchSignatures,
+} from './codemode/index.mjs';
+import { createBridgeToolCaller, createHubCaller } from './codemode/bridge-context.mjs';
+import { isSilkaError } from './codemode/errors.mjs';
 
 const READ_ONLY_AT_MAX = new Set(['silka_state', 'silka_changes', 'silka_decisions']);
 
@@ -304,7 +312,12 @@ export async function startBridge() {
     NOTES_TOOL,
     SEND_TOOL,
     ...STATE_TOOLS,
+    ...CODE_MODE_TOOLS,
   ];
+  const tokenMetrics = measureNfrTok01(hubTools);
+  if (process.env.SILKA_LOG_CODE_MODE_TOKENS === '1') {
+    console.error(`[silka] NFR-TOK-01 aprox: defs ${tokenMetrics.toolDefinitionSavingsPercent}% · lote ${tokenMetrics.batchScenarioSavingsPercent}%`);
+  }
 
   const server = new Server({ name: 'agent-rack', version: '0.1.0' }, { capabilities: { tools: {} } });
   server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -328,6 +341,8 @@ export async function startBridge() {
     const args = request.params.arguments || {};
     const from = callerFrom(server.getClientVersion());
     const manager = isManager(from);
+    let sessions = [];
+    let listed = false;
     if (!visibleToolNames([name], { depth: currentDepth(), manager }).includes(name)) {
       // El mensaje dice la razón real: herramienta solo del manager o tope de profundidad.
       const text = name === 'silka_notes' && !manager
@@ -341,9 +356,73 @@ export async function startBridge() {
       const notes = unreadNotes({ sessionId: args.sessionId, markRead });
       return { content: [{ type: 'text', text: JSON.stringify(notes) }] };
     }
+    if (name === 'silka_search') {
+      const result = searchSignatures(String(args.query || ''));
+      return textResult(JSON.stringify(result));
+    }
+    if (name === 'silka_execute') {
+      let workspace;
+      try {
+        workspace = assertWorkspace(workspaceOf(args), loadSilkaConfig().config.allowedWorkspaces || []);
+      } catch (err) {
+        return textResult(JSON.stringify({
+          code: 'E_SCOPE',
+          message: err instanceof Error ? err.message : String(err),
+        }), true);
+      }
+      try {
+        sessions = await hubSessions(hub);
+        listed = true;
+      } catch {
+        sessions = [];
+      }
+      const lineage = resolveLineage({
+        envDepth: currentDepth(),
+        from,
+        workspace,
+        sessions,
+        origins: readOrigins(),
+      });
+      if (lineage.depth >= maxDepth() && !isManager(from)) {
+        return textResult(JSON.stringify({ code: 'E_POLICY', message: depthBlockMessage(lineage.depth) }), true);
+      }
+      try {
+        const execution = await executeCodeMode({
+          code: String(args.code || ''),
+          workspace,
+          timeoutSeconds: args.timeoutSeconds,
+          author: from,
+          ctx: {
+            callHub: createHubCaller(hub),
+            callBridgeTool: async (toolName, toolArgs) => {
+              if (toolName === 'silka_send') {
+                const session = matchSession(sessions, String(toolArgs.sessionId || ''));
+                const result = performSilkaSend({
+                  from,
+                  manager,
+                  session,
+                  origins: readOrigins(),
+                  text: toolArgs.text,
+                  now: toolArgs.now === true,
+                });
+                return result.interrupted ? `enviado ya ${result.item.id}` : `en cola ${result.item.id}`;
+              }
+              return createBridgeToolCaller({ localTool, textResult, from, sessions })(toolName, toolArgs);
+            },
+            listSessions: () => hubSessions(hub),
+          },
+        });
+        return textResult(JSON.stringify(execution));
+      } catch (err) {
+        const body = isSilkaError(err)
+          ? err
+          : { code: 'E_RUNTIME', message: err instanceof Error ? err.message : String(err) };
+        return textResult(JSON.stringify(body), true);
+      }
+    }
     if (name === 'silka_send') {
       try {
-        const sessions = await hubSessions(hub);
+        sessions = await hubSessions(hub);
         const session = matchSession(sessions, String(args.sessionId || ''));
         const result = performSilkaSend({
           from,
@@ -359,9 +438,7 @@ export async function startBridge() {
         return textResult(err instanceof Error ? err.message : String(err), true);
       }
     }
-    let sessions = [];
-    let listed = false;
-    if (name.startsWith('silka_') || isDelegatingTool(name)) {
+    if ((name.startsWith('silka_') || isDelegatingTool(name)) && !listed) {
       try {
         sessions = await hubSessions(hub);
         listed = true;

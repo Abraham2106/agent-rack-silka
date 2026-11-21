@@ -18,15 +18,15 @@ Estados: `—` sin empezar · `Diseño` especificado · `Construcción` en curso
 ## 2. Requisito → decisión / componente → prueba → estado
 | Requisito | Decisión | Componente | Prueba | Estado |
 |---|---|---|---|---|
-| FR-CM-01 search | ADR-0003 | Bridge / CodeMode | T-CM-01 | Diseño |
-| FR-CM-02 execute | ADR-0003, ADR-0004 | Bridge / Sandbox | T-CM-01 | Diseño |
-| FR-CM-03 salida por referencia | ADR-0002 | Almacén de referencias | T-CM-03 | Diseño |
-| FR-CM-04 superficie de la API | ADR-0003 | API `silka` | T-CM-01 | Diseño |
-| FR-CM-05 errores tipados | ADR-0003 | Bridge | T-SEC-01…07 | Diseño |
-| FR-CM-06 esperas en el hub | ADR-0003 | Hub | T-CM-04 | Diseño |
-| FR-CM-07 compatibilidad | ADR-0003 | Bridge | Regresión `npm test` + smoke | Diseño |
-| FR-CM-08 versión de la API | ADR-0003 | `silka.d.ts` | T-CM-01 | Diseño |
-| FR-CM-09 auditoría de ejecuciones | — | Bridge | T-SEC-08 | Diseño |
+| FR-CM-01 search | ADR-0003 | Bridge / CodeMode | T-CM-01 | Entregado |
+| FR-CM-02 execute | ADR-0003, ADR-0004 | Bridge / Sandbox | T-CM-01 | Entregado |
+| FR-CM-03 salida por referencia | ADR-0002 | Almacén de referencias | T-CM-03 | Entregado |
+| FR-CM-04 superficie de la API | ADR-0003 | API `silka` | T-CM-01 | Entregado |
+| FR-CM-05 errores tipados | ADR-0003 | Bridge | T-SEC-01…07 | Entregado |
+| FR-CM-06 esperas en el hub | ADR-0003 | Hub | T-CM-04 | Entregado (probado con hub falso; falta T-CM-04 con hub real) |
+| FR-CM-07 compatibilidad | ADR-0003 | Bridge | Regresión `npm test` + smoke | Entregado |
+| FR-CM-08 versión de la API | ADR-0003 | `silka.d.ts` | T-CM-01 | Entregado |
+| FR-CM-09 auditoría de ejecuciones | — | Bridge | T-SEC-08 | Entregado |
 | FR-TK-01 worktree por tarea | ADR-0005 | Gestor de tareas | T-TK-01 | Diseño |
 | FR-TK-02 validación de la tarea | — | Gestor de tareas | T-TK-01 | Diseño |
 | FR-TK-03 dependencias | — | Gestor de tareas | T-TK-02 | Diseño |
@@ -45,17 +45,17 @@ Estados: `—` sin empezar · `Diseño` especificado · `Construcción` en curso
 | FR-MQ-08, 09 cierre y visibilidad | — | Cola de mezcla, TUI | T-MQ-01 | Diseño |
 | FR-CX-01…06 contexto | ADR-0002, ADR-0009 | Paquete de contexto | T-CX-01, T-CX-02 | Diseño |
 | FR-ME-01…04 métricas | ADR-0010 | Métricas | T-ME-01, T-ME-02 | Diseño |
-| NFR-TOK-01 ≥ 70% | ADR-0002, ADR-0003 | Code Mode | T-CM-02 | Diseño |
+| NFR-TOK-01 ≥ 70% | ADR-0002, ADR-0003 | Code Mode | T-CM-02 | Estimado ~91% (caracteres/4, lote simulado); falta medición real T-CM-02 |
 | NFR-QUA-01 calidad intacta | ADR-0010 | Métricas + línea base | T-ME-02 | Diseño |
 
 ## 3. Seguridad → amenaza → prueba
 | Control | Amenazas que mitiga | Prueba | Estado |
 |---|---|---|---|
-| SEC-01 sin disco ni procesos | TH-01 | T-SEC-01, 02, 03 | Diseño (verificado en un prototipo manual) |
-| SEC-02 sin red | TH-02 | T-SEC-04, 05 | Diseño |
-| SEC-03 límites | TH-03 | T-SEC-06, 07 | Diseño |
-| SEC-04 política por llamada | TH-04, TH-19 | T-CM-01 | Diseño |
-| SEC-05 referencias opacas | TH-05 | T-CM-03 | Diseño |
+| SEC-01 sin disco ni procesos | TH-01 | T-SEC-01, 02, 03 | Entregado (T-SEC-01…07 pasan) |
+| SEC-02 sin red | TH-02 | T-SEC-04, 05 | Entregado (T-SEC-01…07 pasan) |
+| SEC-03 límites | TH-03 | T-SEC-06, 07 | Entregado (T-SEC-01…07 pasan) |
+| SEC-04 política por llamada | TH-04, TH-19 | T-CM-01 | Entregado (T-SEC-01…07 pasan) |
+| SEC-05 referencias opacas | TH-05 | T-CM-03 | Entregado (T-SEC-01…07 pasan) |
 | SEC-06 git sin hooks | TH-06 | T-TK-04 | Diseño |
 | SEC-07 verify declarado | TH-07 | T-TK-01 | Diseño |
 | SEC-08 humano en riesgo alto | TH-08, TH-09 | T-RV-03 | Diseño |
@@ -82,7 +82,7 @@ Estados: `—` sin empezar · `Diseño` especificado · `Construcción` en curso
 | Paso | Pieza | Requisito de salida | Estado |
 |---|---|---|---|
 | 1 | H1: correcciones de concurrencia | T-CC-01…06 pasan | Entregado (0 fallos en 8 corridas de estrés) |
-| 2 | F1: Code Mode | T-CM-*, T-SEC-01…07 pasan; NFR-TOK-01 medido | — |
+| 2 | F1: Code Mode | T-CM-*, T-SEC-01…07 pasan; NFR-TOK-01 medido | Entregado (49/49); medición real de tokens pendiente |
 | 3 | F2: tareas aisladas | T-TK-* pasan | — |
 | 4 | F3: bandeja | T-RV-* pasan | — |
 | 5 | F4: cola de mezcla | T-MQ-*, T-CC-07 pasan | — |
