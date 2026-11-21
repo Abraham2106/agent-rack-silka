@@ -4,6 +4,7 @@ import { findGitRoot } from './git.mjs';
 import { createHubCallAdapter } from './hub-call.mjs';
 import { createTaskManager } from './manager.mjs';
 import { readTaskStore } from './store.mjs';
+import { listTaskRepos } from './repo-registry.mjs';
 import { STATES } from './states.mjs';
 
 function repoRootsToWatch() {
@@ -11,6 +12,7 @@ function repoRootsToWatch() {
   const roots = new Set();
   const main = findGitRoot(root) || root;
   roots.add(main);
+  for (const repo of listTaskRepos()) roots.add(repo);
   try {
     for (const task of readTaskStore(main).tasks) {
       if (task.worktreePath) {

@@ -1,4 +1,5 @@
 import { silkaError } from '../codemode/errors.mjs';
+import { registerTaskRepo } from './repo-registry.mjs';
 import { warnLiveWorktreeBudget } from './disk.mjs';
 import { diffSummary, currentCommit, findGitRoot } from './git.mjs';
 import { buildDeliveryCard } from './card.mjs';
@@ -157,6 +158,7 @@ export class TaskManager {
     const manual = opts.manual ?? !opts.callHub;
     this.preferManual = manual;
     const rows = this.registerPlan(specs, { cause: opts.cause || 'launch' });
+    try { registerTaskRepo(this.repoRoot); } catch { /* el registro no frena el lanzamiento */ }
     this.schedule({ manual });
     this.warnDiskIfNeeded();
     if (opts.callHub) await this.startPendingSessions(opts);

@@ -1,4 +1,5 @@
 import { loadSilkaConfig } from '../hub.mjs';
+import { listTaskRepos } from '../tasks/repo-registry.mjs';
 import { findGitRoot } from '../tasks/git.mjs';
 import { createHubCallAdapter } from '../tasks/hub-call.mjs';
 import { readTaskStore } from '../tasks/store.mjs';
@@ -14,6 +15,7 @@ function repoRootsWithMergeQueue() {
   const roots = new Set();
   const main = findGitRoot(root) || root;
   roots.add(main);
+  for (const repo of listTaskRepos()) roots.add(repo);
   try {
     for (const task of readTaskStore(main).tasks) {
       if (task.state === STATES.COLA_MEZCLA && task.worktreePath) {
