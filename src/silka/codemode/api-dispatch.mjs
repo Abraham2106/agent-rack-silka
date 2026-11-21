@@ -9,11 +9,12 @@ import { readTaskLogRef } from '../tasks/log-store.mjs';
 import { validateApiArgs } from './api-schema.mjs';
 import { silkaError } from './errors.mjs';
 import { getStoredRef } from './output-store.mjs';
+import { getContextRef } from '../context/ref-store.mjs';
+import { aggregateAgentStats } from '../metrics/stats.mjs';
 
 const NOT_IMPL = new Set([
   'merge.queue',
   'merge.status',
-  'agents.stats',
 ]);
 
 function sleep(ms) {
@@ -61,6 +62,9 @@ export function createApiDispatcher(ctx) {
       const ref = validated[0];
       if (String(ref).startsWith('log:')) {
         return readTaskLogRef(ref, ctx.workspace);
+      }
+      if (String(ref).startsWith('ctx:')) {
+        return getContextRef(ref, ctx.workspace);
       }
       return getStoredRef(ref);
     }
@@ -225,6 +229,12 @@ export function createApiDispatcher(ctx) {
       const [taskId, opt = {}] = validated;
       const svc = createReviewService(ctx.workspace, { actor: 'manager' });
       return svc.discard(taskId, opt);
+    }
+
+    if (method === 'agents.stats') {
+      const agent = validated[0];
+      const model = validated[1];
+      return aggregateAgentStats(ctx.workspace, { agent, model });
     }
 
     throw silkaError('E_NOT_IMPLEMENTED', `Método de API desconocido: ${method}`);

@@ -25,7 +25,7 @@ Punto de entrada a la documentación de diseño. Cada funcionalidad avanza por e
 | F2 | Tareas aisladas (worktree), verificación y fichas de entrega | [F2](../specs/features/F2-tareas-aisladas.md) | Entregado | ver git log "feat(F2)" |
 | F3 | Bandeja de revisión | [F3](../specs/features/F3-bandeja-revision.md) | Entregado (sin vista TUI) | ver git log "feat(F3)" |
 | F4 | Cola de mezcla con re-verificación | [F4](../specs/features/F4-cola-mezcla.md) | Spec escrita, pendiente de aprobación | — |
-| F5 | Contexto por referencia y métricas | [F5](../specs/features/F5-contexto-metricas.md) | Spec escrita, pendiente de aprobación | — |
+| F5 | Contexto por referencia y métricas | [F5](../specs/features/F5-contexto-metricas.md) | Entregado (falta línea base real) | ver git log "feat(F5)" |
 | H1 | Corrección de carreras existentes (C-01…C-07 de concurrency.md) | [concurrency.md](concurrency.md) | Entregado | ver git log "feat(H1)" |
 
 ## Funcionalidades ya entregadas (antes de v1)

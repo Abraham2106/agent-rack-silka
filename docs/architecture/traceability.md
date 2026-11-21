@@ -37,14 +37,14 @@ Estados: `—` sin empezar · `Diseño` especificado · `Construcción` en curso
 | FR-TK-08 tope de simultaneidad | — | Gestor de tareas | T-CC-09 | Entregado |
 | FR-TK-09 puertos | — | Gestor de tareas | T-CC-09 (D-08) | Entregado (comprobación de puerto libre simplificada) |
 | FR-TK-10 fuera de scope | — | Gestor de tareas | T-TK-03 | Entregado |
-| FR-RV-01…08 bandeja | ADR-0006 | Bandeja (hub, TUI) | T-RV-01…05 | Entregado |
+| FR-RV-01…08 bandeja | ADR-0006 | Bandeja (hub, TUI) | T-RV-01…05 | Entregado (FR-RV-07 vista TUI pendiente) |
 | FR-MQ-01 dueño único y fencing | ADR-0006, ADR-0007 | Cola de mezcla | T-MQ-03 | Diseño |
 | FR-MQ-02…05 pasos y fallos | ADR-0006 | Cola de mezcla | T-MQ-01, T-MQ-04 | Diseño |
 | FR-MQ-06 sin push ni reescritura | ADR-0006 | Cola de mezcla | Revisión de código + T-MQ-05 | Diseño |
 | FR-MQ-07 recuperación | ADR-0006 | Cola de mezcla + diario | T-MQ-02, T-CC-07 | Diseño |
 | FR-MQ-08, 09 cierre y visibilidad | — | Cola de mezcla, TUI | T-MQ-01 | Diseño |
-| FR-CX-01…06 contexto | ADR-0002, ADR-0009 | Paquete de contexto | T-CX-01, T-CX-02 | Diseño |
-| FR-ME-01…04 métricas | ADR-0010 | Métricas | T-ME-01, T-ME-02 | Diseño |
+| FR-CX-01…06 contexto | ADR-0002, ADR-0009 | Paquete de contexto | T-CX-01, T-CX-02 | Entregado |
+| FR-ME-01…04 métricas | ADR-0010 | Métricas | T-ME-01, T-ME-02 | Entregado (línea base con PRs reales pendiente) |
 | NFR-TOK-01 ≥ 70% | ADR-0002, ADR-0003 | Code Mode | T-CM-02 | Estimado ~91% (caracteres/4, lote simulado); falta medición real T-CM-02 |
 | NFR-QUA-01 calidad intacta | ADR-0010 | Métricas + línea base | T-ME-02 | Diseño |
 

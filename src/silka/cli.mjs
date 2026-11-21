@@ -29,6 +29,7 @@ function printHelp() {
   silka review approve <id> --version N [workspace]
   silka review reject <id> "<nota>" --version N [workspace]
   silka review discard <id> --version N [workspace]
+  silka metrics [ls|stats <agente> [modelo]|baseline [N]]
 
 Sin hub, los comandos responden: corre: silka hub
 bridge es el MCP por stdio que comparte ese hub.
@@ -116,6 +117,11 @@ ${agent}  (${cat.models.length}${cat.total > cat.models.length ? ` de ${cat.tota
       }
       if (!only && cat.models.length > 8) console.log(`  … ${cat.models.length - 8} más (silka models ${agent})`);
     }
+    return;
+  }
+  if (cmd === 'metrics') {
+    const { metricsCommand } = await import('./metrics/cli.mjs');
+    metricsCommand(argv.slice(1), process.cwd());
     return;
   }
   if (cmd === 'task') {

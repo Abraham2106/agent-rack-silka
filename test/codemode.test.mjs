@@ -147,3 +147,14 @@ test('API no implementada responde E_NOT_IMPLEMENTED', async () => {
     (err) => err.code === 'E_NOT_IMPLEMENTED',
   );
 });
+
+test('agents.stats ya no está sin implementar', async () => {
+  const dispatch = createApiDispatcher({
+    workspace: os.tmpdir(),
+    callHub: async () => ({ content: [{ type: 'text', text: '[]' }] }),
+    callBridgeTool: async () => '',
+    listSessions: async () => [],
+  });
+  const stats = await dispatch(['agents', 'stats'], ['codex', 'gpt']);
+  assert.equal(typeof stats.samples, 'number');
+});

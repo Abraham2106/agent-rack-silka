@@ -1,4 +1,4 @@
-function charTokens(text) {
+export function charTokens(text) {
   return Math.ceil(Buffer.byteLength(String(text ?? ''), 'utf8') / 4);
 }
 
