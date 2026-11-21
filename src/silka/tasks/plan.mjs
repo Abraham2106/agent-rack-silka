@@ -3,8 +3,8 @@ import path from 'node:path';
 import { silkaError } from '../codemode/errors.mjs';
 import { validateTaskList } from './model.mjs';
 
-export function planFromList(items) {
-  return validateTaskList(items);
+export function planFromList(items, repoRoot) {
+  return validateTaskList(items, repoRoot ? { repoRoot } : {});
 }
 
 export function planFromFile(filePath, cwd = process.cwd()) {
@@ -16,7 +16,7 @@ export function planFromFile(filePath, cwd = process.cwd()) {
   if (abs.toLowerCase().endsWith('.json')) {
     const parsed = JSON.parse(text);
     const list = Array.isArray(parsed) ? parsed : parsed?.tasks;
-    return validateTaskList(list);
+    return validateTaskList(list, { repoRoot: path.resolve(cwd) });
   }
   try {
     const parsed = JSON.parse(text);
@@ -27,7 +27,7 @@ export function planFromFile(filePath, cwd = process.cwd()) {
   if (block) {
     const parsed = JSON.parse(block[1]);
     const list = Array.isArray(parsed) ? parsed : parsed?.tasks;
-    return validateTaskList(list);
+    return validateTaskList(list, { repoRoot: path.resolve(cwd) });
   }
   throw silkaError('E_TASK_INVALID', 'Formato de plan no reconocido (usa .json o un bloque ```json).');
 }

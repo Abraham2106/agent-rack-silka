@@ -2,8 +2,10 @@ import { silkaError } from '../codemode/errors.mjs';
 import { warnLiveWorktreeBudget } from './disk.mjs';
 import { diffSummary, currentCommit, findGitRoot } from './git.mjs';
 import { buildDeliveryCard } from './card.mjs';
-import { writeTaskLog } from './log-store.mjs';
+import { writeTaskLog, readTaskLogRef } from './log-store.mjs';
 import { validateTaskList, normalizeTaskInput } from './model.mjs';
+import { runAcceptCriteria } from './accept.mjs';
+import { buildRepairMessage } from './repair.mjs';
 import { allocatePorts, releasePorts, portsEnv } from './ports.mjs';
 import {
   getTask,
@@ -13,7 +15,7 @@ import {
 } from './store.mjs';
 import { activeWorkStates, canTransition, STATES } from './states.mjs';
 import { createTaskWorktree, removeTaskWorktree } from './worktree.mjs';
-import { assertVerifyDeclared, runVerifyCommands } from './verify.mjs';
+import { assertVerifyDeclared, runVerifyWithEvidence } from './verify.mjs';
 
 function nowIso() {
   return new Date().toISOString();
@@ -104,11 +106,15 @@ export class TaskManager {
   }
 
   planFromList(items) {
-    return validateTaskList(items);
+    return validateTaskList(items, { repoRoot: this.repoRoot });
   }
 
   registerPlan(specs, { cause } = {}) {
-    const normalized = specs.map((s) => normalizeTaskInput(s, { id: s.id || newTaskId() }));
+    const normalized = specs.map((s) => normalizeTaskInput(s, {
+      id: s.id || newTaskId(),
+      repoRoot: this.repoRoot,
+      strictVerify: true,
+    }));
     const created = [];
     mutateTaskStore(this.repoRoot, (store) => {
       for (const spec of normalized) {
@@ -276,7 +282,8 @@ export class TaskManager {
   tryFinishAfterSession(taskId, { agentNotes } = {}) {
     const task = getTask(this.repoRoot, taskId);
     if (!task) return false;
-    if (task.state === STATES.LISTA || task.state === STATES.REPARANDO) return false;
+    if (task.state === STATES.LISTA || task.state === STATES.VERIFICACION_FALLIDA) return false;
+    if (task.state === STATES.REPARANDO && !task.pendingRepair) return false;
     if (task.sessionAlive) return false;
     if (task.state === STATES.VERIFICANDO && task.card) return false;
     if (task.state !== STATES.TRABAJANDO && task.state !== STATES.VERIFICANDO) return false;
@@ -290,20 +297,20 @@ export class TaskManager {
     if (task.sessionAlive) {
       throw silkaError('E_POLICY', 'La sesión del agente sigue viva; cancela antes de verificar.');
     }
-    if (task.state === STATES.LISTA || task.state === STATES.REPARANDO) return task.card;
+    if (task.state === STATES.LISTA || task.state === STATES.VERIFICACION_FALLIDA) return task.card;
     return this.finishAgentTurn(taskId, { agentNotes: opts.agentNotes, force: opts.force });
   }
 
   finishAgentTurn(taskId, { agentNotes, force } = {}) {
     const task = getTask(this.repoRoot, taskId);
     if (!task?.worktreePath) throw silkaError('E_POLICY', 'La tarea no tiene worktree.');
-    if (!force && (task.state === STATES.LISTA || task.state === STATES.REPARANDO)) return task.card;
+    if (!force && (task.state === STATES.LISTA || task.state === STATES.VERIFICACION_FALLIDA)) return task.card;
 
     let runVerify = false;
     mutateTaskStore(this.repoRoot, (store) => {
       const row = store.tasks.find((t) => t.id === taskId);
       if (!row) return store;
-      if (!force && (row.state === STATES.LISTA || row.state === STATES.REPARANDO)) return store;
+      if (!force && (row.state === STATES.LISTA || row.state === STATES.VERIFICACION_FALLIDA)) return store;
       if (row.state === STATES.VERIFICANDO && row.card) return store;
       if (row.state === STATES.VERIFICANDO) {
         runVerify = true;
@@ -319,27 +326,97 @@ export class TaskManager {
     const current = getTask(this.repoRoot, taskId);
     if (!runVerify || !current) return current?.card;
 
-    const verifyCmds = assertVerifyDeclared(current.verify);
+    const verifyCmds = assertVerifyDeclared(current.verify, { allowNoVerify: current.allowNoVerify });
     const env = portsEnv(current.allocatedPorts);
-    const { ok, log } = runVerifyCommands(current.worktreePath, verifyCmds, {
-      timeoutMs: this.verifyTimeoutMs,
-      env,
-    });
-    const verifyRef = writeTaskLog(this.repoRoot, taskId, 'verify', log);
+    let evidence = [];
+    let verifyRef = writeTaskLog(this.repoRoot, taskId, 'verify', '');
+  let allOk = true;
+    if (verifyCmds.length) {
+      const vr = runVerifyWithEvidence(this.repoRoot, taskId, current.worktreePath, verifyCmds, {
+        timeoutMs: this.verifyTimeoutMs,
+        env,
+      });
+      evidence = vr.items;
+      verifyRef = vr.verifyRef;
+      allOk = vr.ok;
+    }
+    if (allOk && (current.accept || []).length) {
+      const ar = runAcceptCriteria(this.repoRoot, taskId, current.worktreePath, current.accept, {
+        timeoutMs: this.verifyTimeoutMs,
+        env,
+      });
+      evidence = evidence.concat(ar.items);
+      allOk = allOk && ar.ok;
+    }
     const diff = diffSummary(current.worktreePath, current.baseCommit, { repoRoot: this.repoRoot });
-    const card = buildDeliveryCard(current, { diff, verifyOk: ok, verifyRef, agentNotes });
+    const card = buildDeliveryCard(current, {
+      diff,
+      evidence,
+      verifyRef,
+      agentSays: agentNotes,
+      verifySource: current.verifySource,
+    });
     mutateTaskStore(this.repoRoot, (store) => {
       const row = store.tasks.find((t) => t.id === taskId);
       if (!row) return store;
       row.card = card;
       delete row.verifyStartedAt;
       if (row.state === STATES.VERIFICANDO) {
-        if (ok) recordTransition(row, STATES.LISTA, 'verify_ok');
-        else recordTransition(row, STATES.REPARANDO, 'verify_falló');
+        if (allOk) {
+          recordTransition(row, STATES.LISTA, 'verify_ok');
+        } else {
+          const maxRepairs = Number.isInteger(row.maxRepairs) ? row.maxRepairs : 2;
+          const repairs = Number(row.repairCount) || 0;
+          if (repairs < maxRepairs && row.sessionId) {
+            const repairId = `${row.id}-repair-${repairs + 1}`;
+            const enriched = evidence.map((e) => {
+              if (e.ref && !e.ok) {
+                try {
+                  return { ...e, logSnippet: readTaskLogRef(e.ref, this.repoRoot) };
+                } catch {
+                  return e;
+                }
+              }
+              return e;
+            });
+            row.pendingRepair = {
+              id: repairId,
+              message: buildRepairMessage({ evidence: enriched, verifyRef }),
+            };
+            recordTransition(row, STATES.REPARANDO, 'verify_falló');
+          } else {
+            recordTransition(row, STATES.VERIFICACION_FALLIDA, 'verify_agotado');
+          }
+        }
       }
       return store;
     });
     return card;
+  }
+
+  /** Despacha reparación a la misma sesión (idempotente si el hub reinicia). */
+  async dispatchPendingRepairs({ callHub } = {}) {
+    if (!callHub) return 0;
+    let n = 0;
+    for (const task of this.list()) {
+      const pr = task.pendingRepair;
+      if (!pr?.message || !task.sessionId) continue;
+      if (task.repairDispatchId === pr.id) continue;
+      // eslint-disable-next-line no-await-in-loop
+      await callHub('agent_session_send', { sessionId: task.sessionId, message: pr.message });
+      mutateTaskStore(this.repoRoot, (store) => {
+        const row = store.tasks.find((t) => t.id === task.id);
+        if (!row?.pendingRepair || row.repairDispatchId === pr.id) return store;
+        row.repairDispatchId = pr.id;
+        row.repairCount = (Number(row.repairCount) || 0) + 1;
+        delete row.pendingRepair;
+        recordTransition(row, STATES.TRABAJANDO, 'reparación_auto');
+        row.sessionAlive = true;
+        return store;
+      });
+      n += 1;
+    }
+    return n;
   }
 
   markMerged(taskId, cause = 'mezcla') {

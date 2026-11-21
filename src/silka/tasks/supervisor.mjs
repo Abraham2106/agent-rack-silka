@@ -44,6 +44,8 @@ export async function superviseTasksOnce(client, { repoRoots, defaultAgent = 'co
         if (mgr.tryFinishAfterSession(task.id)) n += 1;
       }
     }
+    // eslint-disable-next-line no-await-in-loop
+    n += await mgr.dispatchPendingRepairs({ callHub });
   }
   return n;
 }

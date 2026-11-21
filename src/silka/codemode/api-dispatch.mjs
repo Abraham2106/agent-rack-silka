@@ -68,7 +68,7 @@ export function createApiDispatcher(ctx) {
     }
 
     if (method === 'plan.fromList') {
-      return planFromList(validated[0]);
+      return planFromList(validated[0], nodePath.resolve(ctx.workspace));
     }
 
     if (method === 'card') {

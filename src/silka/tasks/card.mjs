@@ -1,27 +1,46 @@
+import { escapeAgentText } from '../review/escape.mjs';
 import { partitionByScope } from './scope.mjs';
 import { assessRisk } from './risk.mjs';
 
-/** FR-TK-05: ficha con diff de git, verify y riesgo. */
-export function buildDeliveryCard(task, { diff, verifyOk, verifyRef, agentNotes } = {}) {
+/** FR-TK-05: ficha con diff de git, evidence y riesgo; agentSays no afecta gates. */
+export function buildDeliveryCard(task, {
+  diff,
+  evidence,
+  verifyRef,
+  agentSays,
+  verifySource,
+} = {}) {
   const { inScope, outOfScope } = partitionByScope(diff?.files || [], task.scope);
   const diffLines = (Number(diff?.added) || 0) + (Number(diff?.removed) || 0);
+  const list = evidence || [];
+  const verifyItems = list.filter((e) => e.kind === 'verify');
+  const acceptItems = list.filter((e) => e.kind === 'accept');
+  const verifyOk = verifyItems.length ? verifyItems.every((e) => e.ok) : true;
+  const acceptOk = acceptItems.length ? acceptItems.every((e) => e.ok) : true;
+  const allOk = verifyOk && acceptOk;
   const risk = assessRisk({
-    verifyOk,
+    verifyOk: allOk,
     files: diff?.files,
     outOfScope,
     diffLines,
+    allowNoVerify: task.allowNoVerify,
   });
+  const notes = escapeAgentText(agentSays || '');
   return {
     id: task.id,
     title: task.title,
     state: task.state,
     declared: task.deliver,
-    agentNotes: agentNotes || '',
+    agentSays: notes,
+    agentSaysFrom: 'agente',
+    agentNotes: notes,
+    evidence: list,
+    verifySource: verifySource || task.verifySource || 'declarado',
     files: inScope,
     filesAll: diff?.files || [],
     outOfScope,
     verify: {
-      ok: verifyOk,
+      ok: allOk,
       ref: verifyRef,
     },
     diff: {
@@ -32,7 +51,7 @@ export function buildDeliveryCard(task, { diff, verifyOk, verifyRef, agentNotes 
     openQuestions: task.openQuestions || [],
     risk: risk.level,
     riskDetail: risk,
-    gates: verifyOk ? 'pass' : 'fail',
+    gates: allOk ? 'pass' : 'fail',
     version: task.version,
     baseCommit: task.baseCommit,
     worktreePath: task.worktreePath,

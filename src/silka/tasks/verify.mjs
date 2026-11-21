@@ -1,24 +1,42 @@
 import { spawnSync } from 'node:child_process';
 import { silkaError } from '../codemode/errors.mjs';
+import { harnessFreeEnv } from '../hub.mjs';
+import { writeTaskLog } from './log-store.mjs';
+
+/**
+ * Ejecuta un comando de shell en cwd (verify / accept.cmd).
+ * En Windows usa windowsVerbatimArguments para que cmd.exe no rompa comillas internas.
+ */
+export function spawnShellCommand(cwd, cmd, { timeoutMs = 120_000, env = {} } = {}) {
+  const started = Date.now();
+  const mergedEnv = { ...harnessFreeEnv(process.env), ...env };
+  if (process.platform === 'win32') {
+    return spawnSync('cmd.exe', ['/d', '/s', '/c', `"${cmd}"`], {
+      cwd,
+      encoding: 'utf8',
+      timeout: Math.max(1000, timeoutMs - (Date.now() - started)),
+      env: mergedEnv,
+      windowsHide: true,
+      windowsVerbatimArguments: true,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+  }
+  return spawnSync('sh', ['-c', cmd], {
+    cwd,
+    encoding: 'utf8',
+    timeout: Math.max(1000, timeoutMs - (Date.now() - started)),
+    env: mergedEnv,
+    windowsHide: true,
+    maxBuffer: 8 * 1024 * 1024,
+  });
+}
 
 /** SEC-07: solo comandos declarados en la tarea, nunca sugerencias del agente. */
 export function runVerifyCommands(cwd, commands, { timeoutMs = 120_000, env = {} } = {}) {
   const logs = [];
   let ok = true;
   for (const cmd of commands || []) {
-    const started = Date.now();
-    const shell = process.platform === 'win32' ? 'cmd.exe' : 'sh';
-    const shellArgs = process.platform === 'win32'
-      ? ['/d', '/s', '/c', cmd]
-      : ['-c', cmd];
-    const r = spawnSync(shell, shellArgs, {
-      cwd,
-      encoding: 'utf8',
-      timeout: Math.max(1000, timeoutMs - (Date.now() - started)),
-      env: { ...process.env, ...env },
-      windowsHide: true,
-      maxBuffer: 8 * 1024 * 1024,
-    });
+    const r = spawnShellCommand(cwd, cmd, { timeoutMs, env });
     const block = [
       `$ ${cmd}`,
       `exit: ${r.status ?? '?'}`,
@@ -34,7 +52,46 @@ export function runVerifyCommands(cwd, commands, { timeoutMs = 120_000, env = {}
   return { ok, log: logs.join('\n---\n') };
 }
 
-export function assertVerifyDeclared(commands) {
+/** Ejecuta verify con evidencia por comando (comando, salida, duración, ref). */
+export function runVerifyWithEvidence(repoRoot, taskId, cwd, commands, { timeoutMs = 120_000, env = {} } = {}) {
+  const items = [];
+  const blocks = [];
+  let allOk = true;
+  let idx = 0;
+  for (const cmd of commands || []) {
+    const started = Date.now();
+    const r = spawnShellCommand(cwd, cmd, { timeoutMs, env });
+    const durationMs = Date.now() - started;
+    const block = [
+      `$ ${cmd}`,
+      `exit: ${r.status ?? '?'}`,
+      String(r.stdout || ''),
+      String(r.stderr || ''),
+    ].join('\n');
+    blocks.push(block);
+    const ref = writeTaskLog(repoRoot, taskId, `verify-${idx}`, block);
+    const itemOk = r.status === 0;
+    items.push({
+      kind: 'verify',
+      cmd,
+      exitCode: r.status ?? null,
+      durationMs,
+      ok: itemOk,
+      ref,
+    });
+    if (!itemOk) {
+      allOk = false;
+      break;
+    }
+    idx += 1;
+  }
+  const combined = blocks.join('\n---\n');
+  const verifyRef = writeTaskLog(repoRoot, taskId, 'verify', combined);
+  return { ok: allOk, items, verifyRef, log: combined };
+}
+
+export function assertVerifyDeclared(commands, { allowNoVerify } = {}) {
+  if (allowNoVerify) return commands || [];
   if (!Array.isArray(commands) || !commands.length) {
     throw silkaError('E_TASK_INVALID', 'verify no tiene comandos.');
   }

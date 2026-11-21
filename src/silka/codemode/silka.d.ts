@@ -1,9 +1,9 @@
 /**
- * Silka Code Mode API v1.0.0
+ * Silka Code Mode API v1.1.0 (compatible con 1.0.x)
  * @module silka
  */
 
-export declare const SILKA_API_VERSION: '1.0.0';
+export declare const SILKA_API_VERSION: '1.1.0';
 
 export type SilkaErrorCode =
   | 'E_SYNTAX'
@@ -14,18 +14,54 @@ export type SilkaErrorCode =
   | 'E_CONFLICT'
   | 'E_NOT_IMPLEMENTED'
   | 'E_HUB'
-  | 'E_RUNTIME';
+  | 'E_RUNTIME'
+  | 'E_TASK_INVALID'
+  | 'E_STALE';
+
+export type AcceptCriterion =
+  | { cmd: string }
+  | { grep: { pattern: string; path: string; absent?: boolean } }
+  | { file: { path: string; exists?: boolean } };
 
 export interface TaskSpec {
   title: string;
-  scope?: string;
+  scope?: string | string[];
   deliver?: string;
-  verify?: string;
+  /** Si falta, Silka infiere desde el worktree (verifySource: inferido). */
+  verify?: string | string[];
+  accept?: AcceptCriterion[];
+  allowNoVerify?: boolean;
+  maxRepairs?: number;
   agent?: string;
   model?: string;
   prompt?: string;
   workspace?: string;
   dependsOn?: string[];
+}
+
+export interface TaskEvidenceItem {
+  kind: 'verify' | 'accept';
+  ok: boolean;
+  durationMs?: number;
+  ref?: string | null;
+  cmd?: string;
+  exitCode?: number | null;
+  type?: 'cmd' | 'grep' | 'file';
+  pattern?: string;
+  path?: string;
+  detail?: string;
+}
+
+export interface DeliveryCard {
+  id: string;
+  gates: 'pass' | 'fail';
+  evidence: TaskEvidenceItem[];
+  verifySource?: 'declarado' | 'inferido' | 'ninguno';
+  agentSays: string;
+  agentSaysFrom?: 'agente';
+  verify: { ok: boolean; ref?: string };
+  risk: string;
+  [key: string]: unknown;
 }
 
 export interface LaunchOptions {
@@ -135,7 +171,7 @@ export interface Silka {
   status(id: string): Promise<SessionCard>;
 
   /** Ficha de entrega (F2). */
-  card(id: string): Promise<unknown>;
+  card(id: string): Promise<DeliveryCard>;
 
   /**
    * Recupera una referencia emitida por Silka (`out:<id>`, etc.).

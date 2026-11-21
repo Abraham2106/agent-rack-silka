@@ -4,20 +4,24 @@ import { escapeAgentText } from './escape.mjs';
 
 const RISK_ORDER = { alto: 0, medio: 1, bajo: 2 };
 
-const INBOX_STATES = new Set([STATES.LISTA, STATES.REPARANDO]);
+const INBOX_STATES = new Set([STATES.LISTA, STATES.VERIFICACION_FALLIDA]);
 
 function enteredAt(task) {
   const transitions = task.transitions || [];
   for (let i = transitions.length - 1; i >= 0; i -= 1) {
     const t = transitions[i];
-    if (t.to === STATES.LISTA || t.to === STATES.REPARANDO) return t.at || task.createdAt;
+    if (t.to === STATES.LISTA || t.to === STATES.VERIFICACION_FALLIDA || t.to === STATES.REPARANDO) {
+      return t.at || task.createdAt;
+    }
   }
   return task.createdAt || '';
 }
 
 /** Ficha de bandeja: sin diff completo (FR-RV-05). */
 export function inboxItemFromTask(task) {
-  if (!task?.card || !INBOX_STATES.has(task.state)) return null;
+  if (!task?.card) return null;
+  const mergeRepair = task.state === STATES.REPARANDO && task.mergeFailure;
+  if (!INBOX_STATES.has(task.state) && !mergeRepair) return null;
   const card = task.card;
   return {
     id: task.id,
@@ -28,9 +32,12 @@ export function inboxItemFromTask(task) {
     gates: card.gates,
     declared: card.declared,
     agentSaid: {
-      notes: escapeAgentText(card.agentNotes),
+      notes: escapeAgentText(card.agentSays ?? card.agentNotes),
+      from: card.agentSaysFrom || 'agente',
       openQuestions: (card.openQuestions || []).map(escapeAgentText),
     },
+    evidence: card.evidence || [],
+    verifySource: card.verifySource,
     files: card.files || [],
     outOfScope: card.outOfScope || [],
     diffStats: {
