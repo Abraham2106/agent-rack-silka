@@ -98,3 +98,27 @@ error en su ficha. Verify solo repite el setup si cambió la huella de los lockf
 La segunda barrera ya está: `registerTaskRepo` y `listTaskRepos` ignoran repos bajo `os.tmpdir()` salvo que la
 configuración también sea temporal. Hacía falta porque los worktrees de los agentes, creados antes del
 arreglo, corren `npm test` con el `package.json` viejo y volvieron a llenar el registro (321 entradas).
+
+## BUG-08 · Ninguna tarea aislada podía arrancar tras mover los worktrees (lo introdujo el arreglo de BUG-06)
+
+**Síntoma:** todas las tareas quedaban en `planificada`. agent-rack rechazaba crear la sesión del agente con
+`Workspace path '…\silka\wt\…' is not within allowedWorkspaces`.
+
+**Causa:** el arreglo de BUG-06 (`b3595a7`) movió los worktrees a `%LOCALAPPDATA%\silka\wt`, pero agent-rack
+solo crea sesiones dentro de `allowedWorkspaces`, que tenía únicamente las carpetas del usuario. No se detectó
+porque las pruebas usan un hub falso que no aplica esa lista, y la prueba manual en Windows no llegó a crear una
+sesión de agente: se dio por comprobado sin cubrir el paso esencial.
+
+**Arreglo:** al arrancar, el hub genera una config efectiva para agent-rack (en la carpeta de config de Silka,
+sin tocar `agent-rack.config.json`) que agrega a `allowedWorkspaces` **solo** la carpeta de worktrees de Silka;
+si ya estaba cubierta, no cambia nada (AW-01…04).
+
+**Prueba real:** `npm run e2e:worktree` (`scripts/e2e-worktree-session.mjs`) crea un worktree en la carpeta de
+Silka, arranca agent-rack real en otro puerto con la config efectiva y crea una sesión de agente de verdad. Con
+`--sin-arreglo` reproduce el error original; con el arreglo la sesión se crea y termina.
+
+## Regla para no repetir esto
+
+Un cambio que toque cómo se crean, arrancan o verifican las tareas (worktrees, setup, supervisor, hub, config
+de agent-rack) **no se da por comprobado** con las pruebas de hub falso. Antes de declararlo comprobado hay que
+correr `npm run e2e:worktree`, que crea una sesión de agente real. Si no se corrió, se dice explícitamente.

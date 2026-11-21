@@ -11,7 +11,7 @@ import { startTaskSupervisor } from './tasks/supervisor.mjs';
 import { withFileLock, writeAtomic } from './lock.mjs';
 import { signalProcessTree } from './proc.mjs';
 import { createHubLink, describeNetError } from './hub-link.mjs';
-import { silkaConfigDir } from './paths.mjs';
+import { silkaConfigDir, silkaDataDir } from './paths.mjs';
 
 /** Log del hub en archivo: su consola va minimizada y nadie la lee. */
 export function hubLogPath() {
@@ -197,6 +197,35 @@ export async function ensureHub() {
   throw new HubError('el hub no respondió a tiempo');
 }
 
+const normPath = (p) => path.resolve(String(p)).replaceAll('\\', '/').replace(/\/$/, '').toLowerCase();
+
+/** Carpeta donde Silka crea los worktrees de las tareas (fuera de cualquier repo, BUG-06). */
+export function silkaWorktreesRoot() {
+  return path.join(silkaDataDir(), 'wt');
+}
+
+/**
+ * Config que recibe agent-rack: la del usuario sin cambios, más la carpeta de worktrees de
+ * Silka en allowedWorkspaces. Sin esto agent-rack rechaza crear la sesión del agente en el
+ * worktree ("is not within allowedWorkspaces") y ninguna tarea aislada puede arrancar.
+ * Solo se agrega esa carpeta; nada más se abre. Si ya estaba permitida, no cambia nada.
+ */
+export function effectiveAgentRackConfig(config) {
+  const allowed = Array.isArray(config?.allowedWorkspaces) ? config.allowedWorkspaces : [];
+  const wt = silkaWorktreesRoot();
+  const covered = allowed.some((w) => normPath(wt) === normPath(w) || normPath(wt).startsWith(`${normPath(w)}/`));
+  return covered ? config : { ...config, allowedWorkspaces: [...allowed, wt] };
+}
+
+/** Escribe la config efectiva (el archivo del usuario no se toca) y devuelve su ruta. */
+export function writeEffectiveAgentRackConfig(config, port) {
+  fs.mkdirSync(silkaWorktreesRoot(), { recursive: true });
+  const file = path.join(silkaConfigDir(), `agent-rack.effective-${port}.json`);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  writeAtomic(file, `${JSON.stringify(effectiveAgentRackConfig(config), null, 2)}\n`);
+  return file;
+}
+
 export async function startHub() {
   const status = hubStatus();
   if (status.alive) {
@@ -225,7 +254,9 @@ export async function startHub() {
     readRuntime: () => readRuntime(status.port),
     connect: connectHub,
   });
-  const child = spawn(process.execPath, [bin, 'start', '-t', 'sse', '-c', status.configPath], {
+  const agentRackConfig = writeEffectiveAgentRackConfig(status.config, status.port);
+  hubLog(`agent-rack con worktrees permitidos en ${silkaWorktreesRoot()}`);
+  const child = spawn(process.execPath, [bin, 'start', '-t', 'sse', '-c', agentRackConfig], {
     cwd: status.root,
     stdio: 'inherit',
     env: process.env,

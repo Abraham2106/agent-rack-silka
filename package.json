@@ -16,7 +16,8 @@
     "smoke": "node scripts/smoke.mjs",
     "test": "node --test --import ./test/setup-env.mjs \"test/*.test.mjs\"",
     "silka": "node src/silka/cli.mjs",
-    "spec:validate": "openspec validate --specs --strict"
+    "spec:validate": "openspec validate --specs --strict",
+    "e2e:worktree": "node scripts/e2e-worktree-session.mjs"
   },
   "repository": {
     "type": "git",
