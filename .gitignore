@@ -6,3 +6,5 @@ shims/logs/
 smoke-*.txt
 # generado por npm run setup (rutas locales)
 agent-rack.config.json
+# capturas locales del TUI (tienen contenido de sesiones reales)
+docs/assets/tui-*.html

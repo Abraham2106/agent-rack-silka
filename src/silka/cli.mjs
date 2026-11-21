@@ -13,6 +13,9 @@ function printHelp() {
   silka steer <id> "<mensaje>"   (alias de send --now)
   silka note <id> "<texto>"
   silka ui
+  silka models [agente] [--refresh] [--json]
+  silka models default <agente> <modelo>
+  silka models filter <agente> [patrón...]   (sin patrones: quita el filtro; --all ignora filtros)
   silka mcp
   silka bridge
   silka connect <claude|codex|cursor|opencode|all> [--dry-run] [--with-graph]
@@ -59,6 +62,44 @@ async function main() {
       return;
     }
     throw new Error('Uso: silka graph build|status [workspace]');
+  }
+  if (cmd === 'models') {
+    const { loadModels, setDefaultModel } = await import('./models.mjs');
+    const { loadSilkaConfig } = await import('./hub.mjs');
+    const { configPath, config } = loadSilkaConfig();
+    if (argv[1] === 'filter') {
+      const { setModelFilter } = await import('./models.mjs');
+      const [agent, ...patterns] = argv.slice(2);
+      if (!agent) throw new Error('Uso: silka models filter <agente> [patrón...]');
+      const kept = setModelFilter(agent, patterns);
+      console.log(kept.length ? `${agent}: solo modelos que coinciden con ${kept.join(' | ')}` : `${agent}: sin filtro`);
+      return;
+    }
+    if (argv[1] === 'default') {
+      const [agent, model] = argv.slice(2);
+      if (!agent) throw new Error('Uso: silka models default <agente> <modelo>');
+      setDefaultModel(configPath, agent, model);
+      console.log(model ? `${agent}: modelo por defecto → ${model}` : `${agent}: sin modelo por defecto`);
+      return;
+    }
+    const refresh = argv.includes('--refresh');
+    const asJson = argv.includes('--json');
+    const only = argv.slice(1).find((arg) => !arg.startsWith('--'));
+    const agents = only ? [only] : Object.keys(config.agents ?? {});
+    const out = {};
+    for (const agent of agents) out[agent] = await loadModels(agent, { refresh, all: argv.includes('--all') });
+    if (asJson) { console.log(JSON.stringify(out, null, 2)); return; }
+    for (const [agent, cat] of Object.entries(out)) {
+      const def = config.agents?.[agent]?.model;
+      console.log(`
+${agent}  (${cat.models.length}${cat.total > cat.models.length ? ` de ${cat.total}` : ''} modelos${def ? `, por defecto ${def}` : ''})${cat.error ? `  ! ${cat.error}` : ''}`);
+      for (const m of cat.models.slice(0, only ? 400 : 8)) {
+        const marks = [m.id === def ? '★' : ' ', m.free ? 'gratis' : '', m.available ? '' : '✗ no disponible'].filter(Boolean).join(' ');
+        console.log(`  ${m.id.padEnd(42)} ${marks}`);
+      }
+      if (!only && cat.models.length > 8) console.log(`  … ${cat.models.length - 8} más (silka models ${agent})`);
+    }
+    return;
   }
   if (cmd === 'connect' || cmd === 'disconnect') {
     const { connectHarness, disconnectHarness } = await import('./connect.mjs');

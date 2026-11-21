@@ -41,6 +41,7 @@ import { signalProcessTree, trackDescendants, killTracked } from '../src/silka/p
 import { redactSecrets } from '../src/silka/redact.mjs';
 import { beginTurn, finishTurn, oneLine } from '../src/silka/state.mjs';
 import { createTurnLog } from '../src/silka/transcript.mjs';
+import { noteModelError } from '../src/silka/models.mjs';
 
 export { redactSecrets };
 
@@ -458,6 +459,8 @@ export function clarifyErrorText(agent, model, text) {
   const raw = String(text ?? '').replace(/\s+/g, ' ').trim();
   const vague = !raw || /^error\.?$/i.test(raw);
   const missing = /not found|does not exist|unknown model|invalid model|no such model|is not valid|isn't valid|not supported|not available|no existe/i.test(raw);
+  // El selector de modelos del TUI lo mostrará como "no disponible con tu cuenta".
+  if (model && missing) { try { noteModelError(agent, model, raw); } catch { /* opcional */ } }
   if (model && (vague || missing)) return `modelo '${model}' no existe para ${agent}`;
   return raw || `error de ${agent}`;
 }
