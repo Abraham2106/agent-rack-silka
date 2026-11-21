@@ -1,9 +1,9 @@
 /**
- * Silka Code Mode API v1.3.0 (compatible con 1.0.x, 1.1.x y 1.2.x)
+ * Silka Code Mode API v1.4.0 (compatible con 1.0.x–1.3.x)
  * @module silka
  */
 
-export declare const SILKA_API_VERSION: '1.2.0';
+export declare const SILKA_API_VERSION: '1.4.0';
 
 export type SilkaErrorCode =
   | 'E_SYNTAX'
@@ -37,6 +37,14 @@ export interface TaskSpec {
   prompt?: string;
   workspace?: string;
   dependsOn?: string[];
+  /**
+   * Comandos de preparación del worktree (p. ej. `npm ci`). Si faltan, Silka infiere desde lockfiles del repo.
+   */
+  setup?: string | string[];
+  /**
+   * `link` reutiliza `node_modules` del repo cuando el lockfile coincide; `install` corre `setup` en el worktree.
+   */
+  setupMode?: 'link' | 'install';
 }
 
 export interface TaskEvidenceItem {
@@ -70,6 +78,12 @@ export interface LaunchOptions {
   workspace?: string;
   mode?: string;
   timeoutSeconds?: number;
+  /**
+   * Con `worktree`, crea rama `silka/<id>` y worktree aislado por tarea (F2) en lugar de sesiones en el workspace actual.
+   */
+  isolate?: 'worktree';
+  /** Límite de tareas concurrentes cuando `isolate` es `worktree`. */
+  maxConcurrentTasks?: number;
 }
 
 export interface WaitOptions {
