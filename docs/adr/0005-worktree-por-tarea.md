@@ -8,7 +8,7 @@
 Varios agentes trabajando en el mismo árbol se pisan los archivos. La atribución de cambios se vuelve ambigua (ya visto en QA, E2E-3) y una verificación puede ver cambios a medias de otra tarea.
 
 ## Decisión
-Cada tarea de v1 corre en su propio `git worktree`, **fuera del repo**, en `<datos de Silka>/wt/<repo>-<hash>/<id>` (`%LOCALAPPDATA%silka` en Windows, `~/.local/share/silka` en el resto; ver la enmienda), sobre una rama `silka/<id>` creada desde el commit base. Al terminar se verifica dentro de su worktree. El worktree se elimina solo cuando la tarea se mezcla o se descarta, nunca mientras su sesión sigue viva.
+Cada tarea de v1 corre en su propio `git worktree`, **fuera del repo**, en `<datos de Silka>/wt/<repo>-<hash>/<id>` (`%LOCALAPPDATA%\silka` en Windows, `~/.local/share/silka` en el resto; ver la enmienda), sobre una rama `silka/<id>` creada desde el commit base. Al terminar se verifica dentro de su worktree. El worktree se elimina solo cuando la tarea se mezcla o se descarta, nunca mientras su sesión sigue viva.
 
 ## Alternativas
 - **Mismo árbol con leases de archivos**: más ligero, pero no aísla los efectos de las verificaciones (artefactos de build, tests).

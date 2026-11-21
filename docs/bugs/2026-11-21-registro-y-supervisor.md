@@ -69,7 +69,7 @@ abierta) sin `.git`. La sesión siguió trabajando ahí; como los worktrees vive
 (`.silka/worktrees/`), git subió de carpeta y encontró el repo principal, y el agente escribió en él.
 
 **Arreglo:**
-- Los worktrees viven **fuera del repo**: `%LOCALAPPDATA%silkawt<repo>-<hash><id>` en Windows,
+- Los worktrees viven **fuera del repo**: `%LOCALAPPDATA%\silka\wt\<repo>-<hash>\<id>` en Windows,
   `~/.local/share/silka/wt` en el resto (`src/silka/paths.mjs`, `worktreesBase`). Perder uno ya no cae en el
   repo principal. Lo mismo para los worktrees temporales de la integración. Enmienda en ADR-0005.
 - `isValidWorktree`: antes de arrancar al agente, verificar o reanudarlo para reparar, Silka comprueba que el
