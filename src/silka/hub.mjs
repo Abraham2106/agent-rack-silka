@@ -136,17 +136,32 @@ function sleep(ms) {
 }
 
 /** Arranca `silka hub` (agent-rack + despachador) si no hay uno vivo, y espera el token. */
+/**
+ * Entorno sin variables del harness que lanzó a Silka (TH-11): si el hub nace dentro de
+ * Claude Code, heredaría CLAUDE_CODE_* (token de mensajería, email, ids de cuenta) y CI,
+ * y se los pasaría a cada sub-agente. Ningún agente las necesita.
+ */
+export function harnessFreeEnv(env = process.env) {
+  const out = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (/^CLAUDE_CODE_|^CLAUDECODE$|^CLAUDE_AGENT_SDK_|^CLAUDE_PROJECT_DIR$|^CLAUDE_PID$|^CI$/i.test(key)) continue;
+    out[key] = value;
+  }
+  return out;
+}
+
 export async function ensureHub() {
   const current = hubStatus();
   if (current.alive && current.runtime?.token) return current;
   const cli = fileURLToPath(new URL('./cli.mjs', import.meta.url));
-  const child = spawn(process.execPath, [cli, 'hub'], {
-    cwd: current.root,
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true,
-    env: process.env,
-  });
+  const env = harnessFreeEnv(process.env);
+  // En Windows el hub necesita consola propia: sin ella, las terminales de los agentes
+  // (Cursor) fallan con "Can't find Bash". Se abre minimizada con `start /min`.
+  const child = process.platform === 'win32'
+    ? spawn('cmd.exe', ['/d', '/c', 'start', '"silka hub"', '/min', `"${process.execPath}"`, `"${cli}"`, 'hub'], {
+      cwd: current.root, detached: true, stdio: 'ignore', windowsHide: true, windowsVerbatimArguments: true, env,
+    })
+    : spawn(process.execPath, [cli, 'hub'], { cwd: current.root, detached: true, stdio: 'ignore', env });
   child.unref();
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {

@@ -44,6 +44,7 @@ import { redactSecrets } from '../src/silka/redact.mjs';
 import { beginTurn, finishTurn, oneLine } from '../src/silka/state.mjs';
 import { createTurnLog } from '../src/silka/transcript.mjs';
 import { noteModelError } from '../src/silka/models.mjs';
+import { harnessFreeEnv } from '../src/silka/hub.mjs';
 
 export { redactSecrets };
 
@@ -621,7 +622,7 @@ function runCodex(argv) {
   const child = spawn(l.cmd, [...l.pre, ...args], {
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
-    env: { ...process.env, ...silkaChildEnv('codex', rawPrompt) },
+    env: { ...harnessFreeEnv(process.env), ...silkaChildEnv('codex', rawPrompt) },
   });
   const held = { final: '', text: '' };
   let out = '';
@@ -857,7 +858,7 @@ function runTranslated(spec) {
   const gate = createToolGate();
   const child = spawn(spec.cmd, spec.args, {
     cwd: process.cwd(),
-    env: { ...process.env, ...(spec.env || {}) },
+    env: { ...harnessFreeEnv(process.env), ...(spec.env || {}) },
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   });
