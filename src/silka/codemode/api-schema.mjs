@@ -85,6 +85,10 @@ export function validateApiArgs(path, args) {
       return [assertString(list[0], 'id'), assertString(list[1], 'note'), assertReviewOpts(list[2])];
     case 'review.discard':
       return [assertString(list[0], 'id'), assertReviewOpts(list[1])];
+    case 'merge.queue':
+      return list;
+    case 'merge.status':
+      return [assertString(list[0], 'id')];
     default:
       return list;
   }

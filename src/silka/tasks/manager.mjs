@@ -359,6 +359,32 @@ export class TaskManager {
     return getTask(this.repoRoot, taskId);
   }
 
+  completeMerge(taskId, cause = 'cola_mezcla_ok') {
+    const task = getTask(this.repoRoot, taskId);
+    if (!task) throw silkaError('E_NOT_FOUND', `Tarea no encontrada: ${taskId}`);
+    if (task.state !== STATES.COLA_MEZCLA) {
+      throw silkaError('E_POLICY', `completeMerge requiere en_cola_mezcla (estado: ${task.state}).`);
+    }
+    this.transition(taskId, STATES.MEZCLADA, cause);
+    this.cleanupTask(taskId);
+    this.schedule({ manual: this.preferManual });
+    return getTask(this.repoRoot, taskId);
+  }
+
+  failMerge(taskId, detail, { callHub } = {}) {
+    const task = getTask(this.repoRoot, taskId);
+    if (!task) throw silkaError('E_NOT_FOUND', `Tarea no encontrada: ${taskId}`);
+    if (task.state !== STATES.COLA_MEZCLA) return task;
+    mutateTaskStore(this.repoRoot, (store) => {
+      const row = store.tasks.find((t) => t.id === taskId);
+      if (!row || row.state !== STATES.COLA_MEZCLA) return store;
+      row.mergeFailure = detail;
+      recordTransition(row, STATES.REPARANDO, 'mezcla_falló');
+      return store;
+    });
+    return getTask(this.repoRoot, taskId);
+  }
+
   requestDiscard(taskId, cause = 'descartar') {
     const task = getTask(this.repoRoot, taskId);
     if (!task) throw silkaError('E_NOT_FOUND', `Tarea no encontrada: ${taskId}`);

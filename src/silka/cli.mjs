@@ -29,6 +29,8 @@ function printHelp() {
   silka review approve <id> --version N [workspace]
   silka review reject <id> "<nota>" --version N [workspace]
   silka review discard <id> --version N [workspace]
+  silka merge ls [workspace]
+  silka merge status <id> [workspace]
   silka metrics [ls|stats <agente> [modelo]|baseline [N]]
 
 Sin hub, los comandos responden: corre: silka hub
@@ -197,6 +199,24 @@ ${agent}  (${cat.models.length}${cat.total > cat.models.length ? ` de ${cat.tota
       return;
     }
     throw new Error('Uso: silka review ls|approve|reject|discard ...');
+  }
+  if (cmd === 'merge') {
+    const sub = argv[1];
+    const { mergeList, mergeStatus } = await import('./merge/cli.mjs');
+    const { parseArgs } = await import('./commands.mjs');
+    const { flags, positional } = parseArgs(argv.slice(2));
+    const ws = flags.workspace || process.cwd();
+    if (sub === 'ls') {
+      mergeList(positional[0] || ws);
+      return;
+    }
+    if (sub === 'status') {
+      const id = positional[0];
+      if (!id) throw new Error('Uso: silka merge status <id> [workspace]');
+      mergeStatus(id, positional[1] || ws);
+      return;
+    }
+    throw new Error('Uso: silka merge ls|status ...');
   }
   if (cmd === 'connect' || cmd === 'disconnect') {
     const { connectHarness, disconnectHarness } = await import('./connect.mjs');

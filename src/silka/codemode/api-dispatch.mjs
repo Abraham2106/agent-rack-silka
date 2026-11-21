@@ -2,6 +2,7 @@ import nodePath from 'node:path';
 import { cachedModels, loadModels } from '../models.mjs';
 import { isBusy } from '../format.mjs';
 import { matchSession } from '../commands.mjs';
+import { createMergeService } from '../merge/service.mjs';
 import { createReviewService } from '../review/service.mjs';
 import { createTaskManager } from '../tasks/manager.mjs';
 import { planFromFile, planFromList } from '../tasks/plan.mjs';
@@ -11,11 +12,6 @@ import { silkaError } from './errors.mjs';
 import { getStoredRef } from './output-store.mjs';
 import { getContextRef } from '../context/ref-store.mjs';
 import { aggregateAgentStats } from '../metrics/stats.mjs';
-
-const NOT_IMPL = new Set([
-  'merge.queue',
-  'merge.status',
-]);
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -53,9 +49,6 @@ function taskPrompt(task) {
 export function createApiDispatcher(ctx) {
   return async function dispatchApi(path, args) {
     const method = path.join('.');
-    if (NOT_IMPL.has(method)) {
-      throw silkaError('E_NOT_IMPLEMENTED', `${method} aún no está implementado en Silka v1 (F2–F5).`);
-    }
     const validated = validateApiArgs(path, args);
 
     if (method === 'get') {
@@ -229,6 +222,16 @@ export function createApiDispatcher(ctx) {
       const [taskId, opt = {}] = validated;
       const svc = createReviewService(ctx.workspace, { actor: 'manager' });
       return svc.discard(taskId, opt);
+    }
+
+    if (method === 'merge.queue') {
+      const svc = createMergeService(ctx.workspace);
+      return svc.queue();
+    }
+
+    if (method === 'merge.status') {
+      const svc = createMergeService(ctx.workspace);
+      return svc.status(validated[0]);
     }
 
     if (method === 'agents.stats') {

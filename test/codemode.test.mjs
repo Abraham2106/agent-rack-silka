@@ -135,17 +135,15 @@ test('NFR-TOK-01 aproximado ≥ 70% en lote simulado', () => {
   assert.ok(metrics.batchScenarioSavingsPercent >= 70, JSON.stringify(metrics));
 });
 
-test('API no implementada responde E_NOT_IMPLEMENTED', async () => {
+test('merge.queue expone la cola (F4)', async () => {
   const dispatch = createApiDispatcher({
     workspace: os.tmpdir(),
     callHub: async () => ({ content: [{ type: 'text', text: '{}' }] }),
     callBridgeTool: async () => '',
     listSessions: async () => [],
   });
-  await assert.rejects(
-    () => dispatch(['merge', 'queue'], []),
-    (err) => err.code === 'E_NOT_IMPLEMENTED',
-  );
+  const queue = await dispatch(['merge', 'queue'], []);
+  assert.ok(Array.isArray(queue));
 });
 
 test('agents.stats ya no está sin implementar', async () => {

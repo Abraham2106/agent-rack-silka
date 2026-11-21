@@ -6,6 +6,7 @@ import { DashboardRemoteClient } from 'agent-rack/dist/cli/dashboard/remoteClien
 import { DEFAULT_SSE_PORT } from 'agent-rack/dist/config/schema.js';
 import { tokenFilePath } from 'agent-rack/dist/security/auth.js';
 import { startQueueDispatcher } from './dispatch.mjs';
+import { startMergeSupervisor } from './merge/supervisor.mjs';
 import { startTaskSupervisor } from './tasks/supervisor.mjs';
 import { withFileLock, writeAtomic } from './lock.mjs';
 import { signalProcessTree } from './proc.mjs';
@@ -195,6 +196,10 @@ export async function startHub() {
     readRuntime: () => readRuntime(status.port),
     connect: connectHub,
   });
+  const stopMerge = startMergeSupervisor({
+    readRuntime: () => readRuntime(status.port),
+    connect: connectHub,
+  });
   const child = spawn(process.execPath, [bin, 'start', '-t', 'sse', '-c', status.configPath], {
     cwd: status.root,
     stdio: 'inherit',
@@ -217,6 +222,7 @@ export async function startHub() {
   });
   await stopDispatch();
   await stopTasks();
+  await stopMerge();
 }
 
 export async function withClient(fn) {
