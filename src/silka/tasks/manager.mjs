@@ -165,10 +165,13 @@ export class TaskManager {
     return rows.map((t) => launchPayload(getTask(this.repoRoot, t.id) || t));
   }
 
-  async startPendingSessions({ callHub, defaultAgent = 'codex', defaultModel = '' } = {}) {
-    const pending = this.list().filter((t) => t.awaitingHubSession && t.worktreePath);
+  async startPendingSessions({ callHub, defaultAgent = 'codex', defaultModel = '', log = () => {} } = {}) {
+    // Solo tareas que siguen vivas: antes arrancaba sesiones de tareas ya descartadas.
+    const startable = new Set([STATES.PLANIFICADA, STATES.ESPERANDO_DEPS]);
+    const pending = this.list().filter((t) => t.awaitingHubSession && t.worktreePath && startable.has(t.state));
     const started = [];
     for (const task of pending) {
+      try {
       const prompt = agentPrompt(task);
       if (!prompt.trim()) throw silkaError('E_POLICY', `La tarea ${task.id} no tiene prompt.`);
       const payload = {
@@ -187,10 +190,21 @@ export class TaskManager {
         row.sessionId = sessionId;
         row.awaitingHubSession = false;
         row.sessionAlive = true;
+        delete row.startError;
         recordTransition(row, STATES.TRABAJANDO, 'inicio_sesion_hub');
         return store;
       });
       started.push(task.id);
+      } catch (err) {
+        // Una tarea que no arranca no bloquea a las demás; el motivo queda en la tarea.
+        const msg = err instanceof Error ? err.message : String(err);
+        log(`[silka] no arrancó ${task.id}: ${msg}`);
+        mutateTaskStore(this.repoRoot, (store) => {
+          const row = store.tasks.find((t) => t.id === task.id);
+          if (row) row.startError = msg.slice(0, 500);
+          return store;
+        });
+      }
     }
     return started;
   }

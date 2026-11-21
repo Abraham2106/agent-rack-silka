@@ -23,3 +23,20 @@ test('RR-02 un repo borrado (p. ej. temporal de pruebas) no se vigila', () => {
   fs.rmSync(gone, { recursive: true, force: true });
   assert.ok(!listTaskRepos().includes(path.resolve(gone)));
 });
+
+test('RR-03 una tarea descartada nunca arranca sesión aunque siga marcada como pendiente', async () => {
+  const { createTaskManager } = await import('../src/silka/tasks/manager.mjs');
+  const { mutateTaskStore } = await import('../src/silka/tasks/store.mjs');
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'silka-desc-'));
+  const mgr = createTaskManager(repo);
+  mutateTaskStore(repo, (store) => {
+    store.tasks.push({ id: 'tk-viva', state: 'planificada', awaitingHubSession: true, worktreePath: repo, title: 'viva', prompt: 'x', transitions: [] });
+    store.tasks.push({ id: 'tk-muerta', state: 'descartada', awaitingHubSession: true, worktreePath: repo, title: 'muerta', prompt: 'x', transitions: [] });
+    return store;
+  });
+  const created = [];
+  const callHub = async (_tool, payload) => { created.push(payload.prompt); return { content: [{ type: 'text', text: JSON.stringify({ sessionId: `s${created.length}` }) }] }; };
+  const started = await mgr.startPendingSessions({ callHub });
+  assert.deepEqual(started, ['tk-viva']);
+  assert.equal(created.length, 1);
+});

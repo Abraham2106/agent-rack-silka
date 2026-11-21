@@ -11,6 +11,25 @@ import { startTaskSupervisor } from './tasks/supervisor.mjs';
 import { withFileLock, writeAtomic } from './lock.mjs';
 import { signalProcessTree } from './proc.mjs';
 import { createHubLink, describeNetError } from './hub-link.mjs';
+import { silkaConfigDir } from './paths.mjs';
+
+/** Log del hub en archivo: su consola va minimizada y nadie la lee. */
+export function hubLogPath() {
+  return path.join(silkaConfigDir(), 'hub.log');
+}
+
+function hubLog(message) {
+  const line = `${new Date().toISOString()} ${message}`;
+  console.error(line);
+  try {
+    const file = hubLogPath();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    // Tope simple: si pasa de 1 MB se empieza de nuevo.
+    if (fs.existsSync(file) && fs.statSync(file).size > 1_000_000) fs.writeFileSync(file, '');
+    fs.appendFileSync(file, `${line}
+`);
+  } catch { /* el log nunca tumba al hub */ }
+}
 
 export const HUB_HINT = 'corre: silka hub';
 
@@ -196,9 +215,11 @@ export async function startHub() {
     readRuntime: () => readRuntime(status.port),
     connect: connectHub,
   });
+  hubLog(`hub arrancando en el puerto ${status.port}`);
   const stopTasks = startTaskSupervisor({
     readRuntime: () => readRuntime(status.port),
     connect: connectHub,
+    log: hubLog,
   });
   const stopMerge = startMergeSupervisor({
     readRuntime: () => readRuntime(status.port),
