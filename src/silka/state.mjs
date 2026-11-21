@@ -93,12 +93,37 @@ export function samePath(a, b) {
   return norm(a) === norm(b);
 }
 
+// Caché de lecturas de git solo dentro de withGitCache(): el TUI revisa varias cosas del
+// mismo workspace en un ciclo y cada proceso git cuesta ~100 ms en Windows.
+let gitCache = null;
+
+export function withGitCache(fn) {
+  const outer = gitCache;
+  gitCache = outer || new Map();
+  try {
+    return fn();
+  } finally {
+    gitCache = outer;
+  }
+}
+
 function git(cwd, args) {
+  const key = gitCache ? `${path.resolve(String(cwd))}\0${args.join('\0')}` : '';
+  if (gitCache?.has(key)) return gitCache.get(key);
   const result = spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true, timeout: 20_000 });
-  return { ok: result.status === 0, out: String(result.stdout || '').replace(/\r/g, '') };
+  const out = { ok: result.status === 0, out: String(result.stdout || '').replace(/\r/g, '') };
+  if (gitCache) gitCache.set(key, out);
+  return out;
 }
 
 export function repoInfo(workspace) {
+  // Un solo proceso para lo habitual; el camino largo queda para repos sin commits.
+  // Orden importa: --abbrev-ref afecta a los argumentos que lo siguen.
+  const quick = git(workspace, ['rev-parse', '--is-inside-work-tree', 'HEAD', '--abbrev-ref', 'HEAD']);
+  if (quick.ok) {
+    const [isInside, head, branch] = quick.out.trim().split('\n').map((line) => line.trim());
+    if (isInside === 'true') return { branch: branch || 'HEAD', head: head || '' };
+  }
   const inside = git(workspace, ['rev-parse', '--is-inside-work-tree']);
   if (!inside.ok || inside.out.trim() !== 'true') return null;
   const branch = git(workspace, ['rev-parse', '--abbrev-ref', 'HEAD']).out.trim();

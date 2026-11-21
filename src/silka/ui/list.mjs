@@ -1,6 +1,6 @@
-import { clip, formatDuration, originLabel, promptPreview, shortId, statusIcon } from '../format.mjs';
+import { clip, formatDuration, isBusy, originLabel, promptPreview, shortId, statusIcon } from '../format.mjs';
 import { segLine } from './paint.mjs';
-import { agentColor, c, palette, statusTone } from './theme.mjs';
+import { agentColor, animOn, c, palette, shimmerSegments, SPINNER, statusTone } from './theme.mjs';
 
 /** Ventana de la lista: solo las filas que caben alrededor de la selección. */
 export function sessionWindow(ordered, selectedId, room) {
@@ -20,7 +20,9 @@ export function sessionWindow(ordered, selectedId, room) {
 
 export function renderSessionList(h, Box, Text, {
   ordered, selectedId, meta, models, origins, noted, hotIds, queues, width, height,
+  frame = 0, flashes = {},
 }) {
+  const anim = animOn();
   const inner = Math.max(8, width - 4);
   const room = Math.max(1, height - 2);
   const windowed = sessionWindow(ordered, selectedId, room);
@@ -38,12 +40,21 @@ export function renderSessionList(h, Box, Text, {
       hotIds.has(session.sessionId) ? { text: ' ⚠', color: palette.bad } : null,
       { text: ' ' },
     ].filter(Boolean);
-    const bar = active ? { text: ' ▌', color: tone } : { text: '  ' };
+    // Pulso al terminar: la barra late en verde (o rojo si falló) unos segundos.
+    const flash = flashes[session.sessionId];
+    const pulse = flash && anim ? (Math.floor(frame / 2) % 2 === 0) : Boolean(flash);
+    const bar = flash
+      ? { text: pulse ? ' █' : ' ▌', color: flash.ok ? palette.ok : palette.bad }
+      : active ? { text: ' ▌', color: tone } : { text: '  ' };
+    const busy = isBusy(session.status);
+    const icon = busy && anim ? SPINNER[(frame + depth * 3) % SPINNER.length] : statusIcon(session.status);
     const head = [
       bar,
       { text: indent, color: palette.rule },
-      { text: `${statusIcon(session.status)} `, color: statusTone(session.status) },
-      { text: session.agentId, color: tone, bold: active, dim: !active },
+      { text: `${icon} `, color: flash ? (flash.ok ? palette.ok : palette.bad) : statusTone(session.status) },
+      ...(busy && anim
+        ? shimmerSegments(session.agentId, frame, active ? tone : palette.steelDim, palette.gem).map((seg) => ({ ...seg, bold: active }))
+        : [{ text: session.agentId, color: flash ? (flash.ok ? palette.ok : palette.bad) : tone, bold: active || Boolean(flash), dim: !active && !flash }]),
       ...marks,
       { text: clip(`  ${formatDuration(session)} · ${origin}`, Math.max(0, inner - session.agentId.length - indent.length - 4)), color: palette.muted },
     ];

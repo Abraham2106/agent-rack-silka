@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Box, Text, render, useApp, useInput, useStdout } from 'ink';
 import { sendToSession } from './commands.mjs';
-import { clip, isBusy, nestSessions, statusIcon } from './format.mjs';
+import { clip, formatDuration, isBusy, nestSessions, statusIcon } from './format.mjs';
 import { readMeta, rememberSession } from './hub.mjs';
 import { describeNetError, isConnectionError } from './hub-link.mjs';
 import {
@@ -15,12 +15,13 @@ import {
 import { appendNote, unreadSessionIds } from './notes.mjs';
 import { readOrigins } from './origin.mjs';
 import { listQueue, removeQueued } from './queue.mjs';
-import { matchTaskSession, readStore, refreshConflicts, samePath, workspaceReport } from './state.mjs';
+import { readStore } from './state.mjs';
+import { createWorkspaceScanner } from './ui/scanner.mjs';
 import { readConversation } from './transcript.mjs';
 import { buildChatRows, flattenChatRows, renderChat } from './ui/chat.mjs';
 import { PICKER_ROWS, renderComposer } from './ui/entry.mjs';
 import { segLine, wordmark } from './ui/paint.mjs';
-import { animOn, c, palette, statusTone } from './ui/theme.mjs';
+import { animOn, c, palette, shimmerSegments, SPINNER, statusTone } from './ui/theme.mjs';
 import { cachedModels, loadModels, pickerItems, recentModels, rememberRecentModel, setDefaultModel } from './models.mjs';
 import { loadSilkaConfig } from './hub.mjs';
 import { renderHelp } from './ui/help.mjs';
@@ -67,7 +68,7 @@ export function uiRenderOptions(env = process.env) {
   const fullscreen = env.SILKA_NO_FULLSCREEN !== '1';
   return {
     alternateScreen: fullscreen,
-    maxFps: 10,
+    maxFps: 30,
     incrementalRendering: true,
     kittyKeyboard: fullscreen ? { mode: 'auto' } : undefined,
   };
@@ -76,6 +77,8 @@ export function uiRenderOptions(env = process.env) {
 function pendingQueue(sessionId) {
   return listQueue(sessionId).filter((item) => item.status === 'pending');
 }
+
+const FLASH_MS = 2400;
 
 export function App({ client, port, agents, models = {} }) {
   const { exit } = useApp();
@@ -108,6 +111,8 @@ export function App({ client, port, agents, models = {} }) {
   const [pinned, setPinned] = useState(true);
   const [queueId, setQueueId] = useState(null);
   const [frameTick, setFrameTick] = useState(0);
+  const [flashes, setFlashes] = useState({});
+  const prevStatusRef = useRef(new Map());
   const [catalogs, setCatalogs] = useState({});
   const [defaults, setDefaults] = useState(() => ({ ...models }));
 
@@ -141,6 +146,29 @@ export function App({ client, port, agents, models = {} }) {
   focusRef.current = focus;
   queueIdRef.current = queueId;
 
+  /** Sesiones que pasaron de trabajando a terminadas: pulso en la lista y aviso. */
+  function noteFinished(sessionsNow) {
+    const prev = prevStatusRef.current;
+    const first = prev.size === 0;
+    const done = [];
+    for (const session of sessionsNow) {
+      const was = prev.get(session.sessionId);
+      if (!first && was && isBusy(was) && !isBusy(session.status)) done.push(session);
+      prev.set(session.sessionId, session.status);
+    }
+    if (!done.length) return;
+    const until = Date.now() + FLASH_MS;
+    setFlashes((all) => ({ ...all, ...Object.fromEntries(done.map((s) => [s.sessionId, { ok: s.status === 'completed', until }])) }));
+    const last = done[done.length - 1];
+    const ok = last.status === 'completed';
+    const extra = done.length > 1 ? ` (+${done.length - 1})` : '';
+    setBanner({
+      text: `${ok ? '✓' : '✗'} ${last.agentId} ${ok ? 'terminó' : last.status === 'cancelled' ? 'se canceló' : 'falló'} · ${formatDuration(last)}${extra}`,
+      color: ok ? 'green' : 'red',
+      finished: true,
+    });
+  }
+
   function fail(err) {
     setBanner({ text: err instanceof Error ? err.message : String(err), color: 'red' });
   }
@@ -169,12 +197,28 @@ export function App({ client, port, agents, models = {} }) {
     return () => stdout.off?.('resize', apply);
   }, [stdout]);
 
-  const selectedBusy = isBusy(sessions.find((s) => s.sessionId === selectedId)?.status);
+  // El reloj de animación solo corre si algo se mueve: una sesión trabajando o un pulso
+  // de "terminó". Quieto, el TUI no repinta (cero CPU).
+  const anyBusy = sessions.some((s) => isBusy(s.status));
+  const hasFlash = Object.keys(flashes).length > 0;
   useEffect(() => {
-    if (!selectedBusy || !animOn()) return undefined;
-    const timer = setInterval(() => setFrameTick((n) => n + 1), 100);
+    if (!animOn()) {
+      // Sin animaciones: el pulso queda fijo y se quita solo.
+      if (!hasFlash) return undefined;
+      const done = setTimeout(() => setFlashes({}), FLASH_MS);
+      return () => clearTimeout(done);
+    }
+    if (!anyBusy && !hasFlash) return undefined;
+    const timer = setInterval(() => {
+      setFrameTick((n) => n + 1);
+      setFlashes((all) => {
+        const now = Date.now();
+        const kept = Object.fromEntries(Object.entries(all).filter(([, f]) => f.until > now));
+        return Object.keys(kept).length === Object.keys(all).length ? all : kept;
+      });
+    }, 100);
     return () => clearInterval(timer);
-  }, [selectedBusy]);
+  }, [anyBusy, hasFlash]);
 
   /** Catálogo del agente: primero lo que hay en caché (instantáneo), luego el CLI si está viejo. */
   function loadCatalog(agent) {
@@ -202,6 +246,8 @@ export function App({ client, port, agents, models = {} }) {
     let cancel = false;
     let running = false;
     let painted = false;
+    // Cuando llega un escaneo nuevo se repinta ya, sin esperar al siguiente ciclo.
+    const scanner = createWorkspaceScanner({ onUpdate: () => { signatureRef.current = ''; tick(); } });
 
     async function tick() {
       if (running || cancel) return;
@@ -225,25 +271,11 @@ export function App({ client, port, agents, models = {} }) {
         for (const session of sessionsNow) {
           if (isBusy(session.status) && session.workspace) dirs.add(session.workspace);
         }
-        const hot = new Set();
-        let nextBoard = null;
-        const fresh = Date.now() - 6 * 60 * 60 * 1000;
-        for (const dir of dirs) {
-          try {
-            refreshConflicts(dir, sessionsNow);
-            const report = workspaceReport(dir);
-            if (selectedNow && samePath(selectedNow.workspace, dir)) nextBoard = report;
-            for (const conflict of report.conflicts) {
-              if (Date.parse(conflict.at) < fresh) continue;
-              for (const taskId of conflict.taskIds || []) {
-                const task = report.tasks.find((item) => item.id === taskId);
-                const session = task ? matchTaskSession({ ...task, workspace: dir }, sessionsNow) : null;
-                if (session) hot.add(session.sessionId);
-              }
-            }
-          } catch { /* un workspace sin estado no frena el tablero */ }
-        }
-        const clearBoard = !dirs.size;
+        // git va en otro hilo y a otro ritmo (cada 3 s o al cambiar un estado); aquí solo
+        // se usa el último resultado, así el teclado nunca espera a git.
+        const statusSig = `${selectedNow?.workspace || ''}|${sessionsNow.map((s) => `${s.sessionId}:${s.status}`).join(',')}`;
+        scanner.request({ dirs: [...dirs], sessions: sessionsNow, selectedWorkspace: selectedNow?.workspace || '' }, statusSig);
+        const { hot, board: nextBoard, clear: clearBoard } = scanner.latest();
 
         const currentId = selectedIdRef.current;
         const current = sessionsNow.find((session) => session.sessionId === currentId) ?? sessionsNow[0];
@@ -272,6 +304,7 @@ export function App({ client, port, agents, models = {} }) {
         }
         if (sign === signatureRef.current) return;
         signatureRef.current = sign;
+        noteFinished(sessionsNow);
         setSessions(sessionsNow);
         setMeta(readMeta(port));
         setOrigins(readOrigins());
@@ -299,10 +332,12 @@ export function App({ client, port, agents, models = {} }) {
     }
 
     tick();
-    const timer = setInterval(tick, 1500);
+    // Las sesiones cuestan ~10 ms al hub: se pueden pedir a menudo. git va aparte (scanner).
+    const timer = setInterval(tick, 500);
     return () => {
       cancel = true;
       clearInterval(timer);
+      scanner.close();
     };
   }, [client, port]);
 
@@ -807,7 +842,7 @@ export function App({ client, port, agents, models = {} }) {
         { flexGrow: 1, height: bodyH, overflow: 'hidden' },
         listHidden ? null : renderSessionList(h, Box, Text, {
           ordered, selectedId: selected?.sessionId, meta, models: defaults, origins, noted, hotIds, queues,
-          width: leftWidth, height: bodyH,
+          width: leftWidth, height: bodyH, frame: frameTick, flashes,
         }),
         renderChat(h, Box, Text, {
           session: selected, meta, origins, models: defaults, events, queued,
@@ -847,7 +882,12 @@ export function App({ client, port, agents, models = {} }) {
       frame.header >= 2
         ? { height: frame.header, overflow: 'hidden', borderStyle: 'single', borderColor: c(palette.rule), borderTop: false, borderLeft: false, borderRight: false }
         : { height: frame.header, overflow: 'hidden' },
-      segLine(h, Text, [{ text: ' silka', color: palette.title, bold: true }, ...(tabs.length ? tabs : [{ text: '   sin sesiones', color: palette.muted }]), { text: working ? `    ${working} trabajando` : '', color: palette.tool }], 'head'),
+      segLine(h, Text, [{ text: ' silka', color: palette.title, bold: true }, ...(tabs.length ? tabs : [{ text: '   sin sesiones', color: palette.muted }]), ...(working
+        ? [
+          { text: `    ${animOn() ? SPINNER[frameTick % SPINNER.length] : '✻'} `, color: palette.gem },
+          ...(animOn() ? shimmerSegments(`${working} trabajando`, frameTick, palette.tool, palette.gem) : [{ text: `${working} trabajando`, color: palette.tool }]),
+        ]
+        : [])], 'head'),
     )
     : null;
   const picker = pickerFor(wizard);

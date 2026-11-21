@@ -146,8 +146,11 @@ function sleep(ms) {
  */
 export function harnessFreeEnv(env = process.env) {
   const out = {};
+  // `silka ui` pone NODE_ENV=production solo para su React; no debe llegar a los agentes.
+  const uiNodeEnv = env.SILKA_UI_NODE_ENV === '1';
   for (const [key, value] of Object.entries(env)) {
     if (/^CLAUDE_CODE_|^CLAUDECODE$|^CLAUDE_AGENT_SDK_|^CLAUDE_PROJECT_DIR$|^CLAUDE_PID$|^CI$/i.test(key)) continue;
+    if (key === 'SILKA_UI_NODE_ENV' || (uiNodeEnv && key === 'NODE_ENV')) continue;
     out[key] = value;
   }
   return out;

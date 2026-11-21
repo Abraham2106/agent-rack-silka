@@ -3,12 +3,23 @@ import { cellRatio, markGrid, renderMark, SILKA_PALETTE, trimGrid } from './logo
 // Paleta tomada del logo (hachas acero + filo y anillo violeta). Ink/chalk degradan solos
 // a 256 o 16 colores según la terminal; aquí solo respetamos NO_COLOR y SILKA_NO_ANIM.
 
+// Se llaman por cada segmento pintado; leer process.env es caro (en Windows cada acceso
+// consulta el bloque de entorno), así que con process.env se calcula una sola vez.
+let colorCache;
+let animCache;
+
 export function colorOn(env = process.env) {
-  return !('NO_COLOR' in env) && env.SILKA_NO_COLOR !== '1' && env.TERM !== 'dumb';
+  if (env === process.env && colorCache !== undefined) return colorCache;
+  const on = !('NO_COLOR' in env) && env.SILKA_NO_COLOR !== '1' && env.TERM !== 'dumb';
+  if (env === process.env) colorCache = on;
+  return on;
 }
 
 export function animOn(env = process.env) {
-  return colorOn(env) && env.SILKA_NO_ANIM !== '1' && env.CI === undefined;
+  if (env === process.env && animCache !== undefined) return animCache;
+  const on = colorOn(env) && env.SILKA_NO_ANIM !== '1' && env.CI === undefined;
+  if (env === process.env) animCache = on;
+  return on;
 }
 
 // Lenguaje visual de Antigravity CLI: texto claro sobre carbón, el prompt del usuario en

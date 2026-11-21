@@ -228,7 +228,8 @@ test('parsea Ctrl+Enter y Alt+Enter', () => {
   }
   assert.equal(uiRenderOptions({}).alternateScreen, true);
   assert.equal(uiRenderOptions({ SILKA_NO_FULLSCREEN: '1' }).alternateScreen, false);
-  assert.equal(uiRenderOptions({}).maxFps, 10);
+  // 30 fps: con React en producción el repintado es barato y el eco de tecla baja de ~100 a ~33 ms.
+  assert.equal(uiRenderOptions({}).maxFps, 30);
 });
 
 test('Esc solo se suelta tras una pausa corta (no queda retenido)', async () => {

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { listSessionsCommand, noteSession, queueCommand, runSession, sendMessage, steerSession } from './commands.mjs';
-import { startHub, withClient } from './hub.mjs';
+// Sin imports pesados arriba: `silka ui` muestra su pantalla de carga antes de cargar
+// el cliente del hub (MCP SDK, zod, ajv) e Ink (~900 módulos en total).
 
 function printHelp() {
   console.log(`silka — hub y TUI para sesiones de agent-rack
@@ -47,6 +47,7 @@ async function main() {
     return;
   }
   if (cmd === 'hub') {
+    const { startHub } = await import('./hub.mjs');
     await startHub();
     return;
   }
@@ -250,24 +251,49 @@ ${agent}  (${cat.models.length}${cat.total > cat.models.length ? ` de ${cat.tota
     throw new Error(`Comando desconocido: ${cmd}`);
   }
   // ui y run no deberían pedirte abrir otra terminal: si no hay hub, lo levantan en segundo plano.
-  if (cmd === 'ui' || cmd === 'run') {
-    const { ensureHub, hubStatus } = await import('./hub.mjs');
-    if (!hubStatus().alive) {
-      process.stderr.write('Arrancando el hub en segundo plano…\n');
+  let splash = null;
+  let uiModule = null;
+  if (cmd === 'ui') {
+    // React en modo desarrollo valida cada elemento y guarda pilas para depurar: era lo
+    // que más CPU gastaba al teclear. Solo en este proceso; harnessFreeEnv lo quita antes
+    // de pasar el entorno al hub (y de ahí a los agentes y a sus `npm install`).
+    if (process.env.NODE_ENV === undefined) {
+      process.env.NODE_ENV = 'production';
+      process.env.SILKA_UI_NODE_ENV = '1';
+    }
+    const { startSplash } = await import('./ui/splash.mjs');
+    splash = startSplash();
+    // Ink y React cargan mientras se conecta el hub, no después.
+    uiModule = import('./ui.mjs');
+    uiModule.catch(() => {});
+  }
+  try {
+    const { ensureHub, hubStatus, withClient } = await import('./hub.mjs');
+    // ui y run no deberían pedirte abrir otra terminal: si no hay hub, lo levantan en segundo plano.
+    if ((cmd === 'ui' || cmd === 'run') && !hubStatus().alive) {
+      if (splash) splash.phase('arrancando el hub');
+      else process.stderr.write('Arrancando el hub en segundo plano…\n');
       await ensureHub();
     }
+    splash?.phase('conectando con el hub');
+    const commands = cmd === 'ui' ? null : await import('./commands.mjs');
+    await withClient(async (client, status) => {
+      if (cmd === 'ls') return commands.listSessionsCommand(client, status.port);
+      if (cmd === 'run') return commands.runSession(client, status, argv.slice(1));
+      if (cmd === 'send') return commands.sendMessage(client, argv.slice(1));
+      if (cmd === 'queue') return commands.queueCommand(client, argv.slice(1));
+      if (cmd === 'steer') return commands.steerSession(client, status, argv.slice(1));
+      if (cmd === 'note') return commands.noteSession(client, argv.slice(1));
+      splash.phase('cargando la interfaz');
+      const { runUi } = await uiModule;
+      const models = Object.fromEntries(status.agents.map((id) => [id, status.config.agents?.[id]?.model || '']));
+      splash.stop({ handoff: true });
+      splash = null;
+      return runUi({ client, port: status.port, agents: status.agents, models });
+    });
+  } finally {
+    splash?.stop();
   }
-  await withClient(async (client, status) => {
-    if (cmd === 'ls') return listSessionsCommand(client, status.port);
-    if (cmd === 'run') return runSession(client, status, argv.slice(1));
-    if (cmd === 'send') return sendMessage(client, argv.slice(1));
-    if (cmd === 'queue') return queueCommand(client, argv.slice(1));
-    if (cmd === 'steer') return steerSession(client, status, argv.slice(1));
-    if (cmd === 'note') return noteSession(client, argv.slice(1));
-    const { runUi } = await import('./ui.mjs');
-    const models = Object.fromEntries(status.agents.map((id) => [id, status.config.agents?.[id]?.model || '']));
-    return runUi({ client, port: status.port, agents: status.agents, models });
-  });
 }
 
 main()
