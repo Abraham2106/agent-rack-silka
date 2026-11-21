@@ -194,7 +194,7 @@ function rowSegments(row, { active, selectedQueue, width }) {
 
 /** Cabecera de la conversación (scrollea con ella): logo + "Silka 0.1.0" + agente·modelo + carpeta. */
 export function bannerRows(session, model, width) {
-  const logo = width >= 60 ? logoRows(20) : width >= 40 ? logoRows(14) : [];
+  const logo = width >= 60 ? logoRows(24) : width >= 40 ? logoRows(16) : [];
   const info = [
     [{ text: 'Silka 0.1.0', color: palette.title, bold: true }],
     [{ text: `${session.agentId} · ${model || 'modelo por defecto'}`, color: palette.muted }],

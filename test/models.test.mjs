@@ -68,3 +68,18 @@ test('tema: mezcla, degradado, brillo y logo', () => {
   assert.ok(rows.flat().some((s) => s.text !== ' '));
   assert.ok(logoRows(16, { NO_COLOR: '' }).flat().every((s) => !s.color)); // NO_COLOR: sin color
 });
+
+test('Silka Pixel Mark: 32×32, marca de 24u con margen de 4u y simetría en espejo', async () => {
+  const { silkaMarkGrid, silkaMarkCropped } = await import('../src/silka/ui/logo.mjs');
+  const grid = silkaMarkGrid();
+  assert.equal(grid.length, 32);
+  assert.ok(grid.every((row) => row.length === 32));
+  for (const row of grid) for (let x = 0; x < 16; x += 1) assert.equal(row[x], row[31 - x]);
+  // margen libre de 4u arriba, a la izquierda y a la derecha
+  for (const y of [0, 1, 2, 3]) assert.ok(grid[y].every((p) => !p));
+  for (const row of grid) for (const x of [0, 1, 2, 31, 30, 29]) assert.equal(row[x], null);
+  // diamante central y anillo violeta presentes
+  assert.equal(grid[15][15], 'violetLight');
+  assert.ok(grid.flat().some((p) => p === 'violet'));
+  assert.equal(silkaMarkCropped().length, 24);
+});
