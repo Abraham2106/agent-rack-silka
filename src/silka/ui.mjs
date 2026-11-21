@@ -3,6 +3,7 @@ import { Box, Text, render, useApp, useInput, useStdout } from 'ink';
 import { sendToSession } from './commands.mjs';
 import { clip, isBusy, nestSessions, statusIcon } from './format.mjs';
 import { readMeta, rememberSession } from './hub.mjs';
+import { describeNetError, isConnectionError } from './hub-link.mjs';
 import {
   MODIFY_OTHER_KEYS_OFF,
   MODIFY_OTHER_KEYS_ON,
@@ -126,6 +127,7 @@ export function App({ client, port, agents, models = {} }) {
   const queueIdRef = useRef(null);
   const pageRef = useRef(8);
   const signatureRef = useRef('');
+  const hubDownRef = useRef(false);
 
   sessionsRef.current = sessions;
   selectedIdRef.current = selectedId;
@@ -262,6 +264,12 @@ export function App({ client, port, agents, models = {} }) {
           Object.entries(queuedMap).map(([id, items]) => `${id}:${items.map((item) => `${item.id}${item.now ? '!' : ''}`).join(',')}`).join('|'),
           [...hot].sort().join(','),
         ].join('#');
+        if (hubDownRef.current) {
+          // Volvió la conexión: se quita el aviso aunque nada más haya cambiado.
+          hubDownRef.current = false;
+          setHubOk(true);
+          setBanner((b) => (b?.hub ? null : b));
+        }
         if (sign === signatureRef.current) return;
         signatureRef.current = sign;
         setSessions(sessionsNow);
@@ -276,7 +284,14 @@ export function App({ client, port, agents, models = {} }) {
       } catch (err) {
         if (!cancel) {
           setHubOk(false);
-          fail(err);
+          if (isConnectionError(err) || /No hay hub/.test(String(err?.message))) {
+            // El enlace reconecta solo en el siguiente ciclo; aquí solo se avisa.
+            hubDownRef.current = true;
+            signatureRef.current = '';
+            setBanner({ text: `Sin conexión con el hub · reconectando… (${describeNetError(err)})`, color: 'yellow', hub: true });
+          } else {
+            fail(err);
+          }
         }
       } finally {
         running = false;

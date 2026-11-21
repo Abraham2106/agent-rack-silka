@@ -10,6 +10,7 @@ import { startMergeSupervisor } from './merge/supervisor.mjs';
 import { startTaskSupervisor } from './tasks/supervisor.mjs';
 import { withFileLock, writeAtomic } from './lock.mjs';
 import { signalProcessTree } from './proc.mjs';
+import { createHubLink, describeNetError } from './hub-link.mjs';
 
 export const HUB_HINT = 'corre: silka hub';
 
@@ -225,16 +226,27 @@ export async function startHub() {
   await stopMerge();
 }
 
-export async function withClient(fn) {
+/** Abre un cliente del hub leyendo el token vigente (cambia si el hub se reinició). */
+export async function openHubClient() {
   const status = hubStatus();
   if (!status.alive || !status.runtime?.token) throw new HubError();
   const client = new DashboardRemoteClient(status.url, status.runtime.token);
   try {
     await client.connect();
   } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    throw new HubError(detail);
+    await client.close().catch(() => {});
+    throw new HubError(describeNetError(err));
   }
+  return client;
+}
+
+export async function withClient(fn, { onState } = {}) {
+  const status = hubStatus();
+  if (!status.alive || !status.runtime?.token) throw new HubError();
+  // Enlace que reconecta: si el hub se reinicia o la conexión SSE se cae, la siguiente
+  // llamada abre otra en vez de fallar para siempre con "fetch failed".
+  const client = createHubLink(openHubClient, { onState });
+  await client.connect();
   try {
     return await fn(client, status);
   } finally {

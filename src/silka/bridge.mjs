@@ -7,6 +7,7 @@ import { sseTransportInit } from 'agent-rack/dist/security/auth.js';
 import { validateWorkspacePath } from 'agent-rack/dist/security/workspace.js';
 import { isBusy } from './format.mjs';
 import { ensureHub, loadSilkaConfig } from './hub.mjs';
+import { createHubLink } from './hub-link.mjs';
 import { stampPrompt } from './mark.mjs';
 import { unreadNotes } from './notes.mjs';
 import { matchSession, sendToSession } from './commands.mjs';
@@ -301,10 +302,17 @@ function localTool(name, args, from, sessions) {
 }
 
 export async function startBridge() {
-  const status = await ensureHub();
-  const hub = new Client({ name: 'silka-bridge', version: '0.1.0' });
-  const sse = new SSEClientTransport(new URL(status.url), sseTransportInit(status.runtime.token));
-  await hub.connect(sse);
+  // Enlace que reconecta: si el hub se reinicia (token nuevo) o el SSE se cae por
+  // inactividad, la siguiente herramienta reabre la conexión (y levanta el hub si murió)
+  // en vez de devolver "fetch failed" hasta reiniciar el harness.
+  const hub = createHubLink(async () => {
+    const status = await ensureHub();
+    const client = new Client({ name: 'silka-bridge', version: '0.1.0' });
+    const sse = new SSEClientTransport(new URL(status.url), sseTransportInit(status.runtime.token));
+    await client.connect(sse);
+    return client;
+  });
+  await hub.connect();
   const listed = await hub.listTools(undefined, { timeout: 20_000 });
   const hubTools = listed.tools ?? [];
   const tools = [

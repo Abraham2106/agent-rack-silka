@@ -91,3 +91,18 @@ test('si reanudar falla, el lote queda como no entregado (no se reintenta en buc
   assert.equal(await dispatchOnce(client), 0);
   clearQueue(id);
 });
+
+test('si el hub se reinicia al entregar, el mensaje vuelve a la cola y llega tras reconectar', async () => {
+  const id = `corte-${process.pid}-${Date.now()}`;
+  enqueueMessage(id, { author: 'tú', text: 'no te pierdas' });
+  const sessions = async () => [{ sessionId: id, status: 'completed', turnCount: 1 }];
+  const refused = Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
+  const down = { listSessions: sessions, sendInput: async () => { throw refused; } };
+  await assert.rejects(dispatchOnce(down), /fetch failed/);
+  assert.equal(listQueue(id)[0].status, 'pending', 'no se marca como fallido');
+  const got = [];
+  const up = { listSessions: sessions, sendInput: async (_s, text) => { got.push(text); } };
+  assert.equal(await dispatchOnce(up), 1);
+  assert.match(got[0], /no te pierdas/);
+  clearQueue(id);
+});

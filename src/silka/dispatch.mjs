@@ -1,6 +1,7 @@
 import { isBusy } from './format.mjs';
 import { completeDelivery, failDelivery, formatDelivery, listQueue, queuedSessionIds, releaseDelivery, takeForDelivery } from './queue.mjs';
 import { appendNote } from './notes.mjs';
+import { describeNetError, isNotSentError } from './hub-link.mjs';
 
 function warn(sessionId, text) {
   try { appendNote({ sessionId, text, kind: 'entrega-fallida' }); } catch { /* la nota es opcional */ }
@@ -35,8 +36,14 @@ export async function dispatchOnce(client) {
       completeDelivery(session.sessionId, ids);
       sent += 1;
     } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err);
+      const detail = describeNetError(err);
       if (stillRunning(detail)) { releaseDelivery(session.sessionId, ids); continue; }
+      if (isNotSentError(err)) {
+        // El mensaje no llegó al hub (se reinició o se cortó el SSE): vuelve a la cola y
+        // el ciclo de fuera reconecta. Antes se daba por fallido y se perdía.
+        releaseDelivery(session.sessionId, ids);
+        throw err;
+      }
       // Antes solo iba a stderr. Ahora queda en el chat (✗) y como nota para el manager.
       console.error(`cola ${String(session.sessionId).slice(0, 8)}: ${detail}`);
       failDelivery(session.sessionId, ids, detail);
