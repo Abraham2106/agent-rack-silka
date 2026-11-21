@@ -15,38 +15,43 @@ Estados: `—` sin empezar · `Diseño` especificado · `Construcción` en curso
 | G6. Sandbox sin fugas | SEC-01…05 |
 | G7. Corrección bajo concurrencia | I-1…I-7, FR-MQ-01, FR-MQ-07, FR-RV-02 |
 
-## 2. Requisito → decisión / componente → prueba → estado
-| Requisito | Decisión | Componente | Prueba | Estado |
-|---|---|---|---|---|
-| FR-CM-01 search | ADR-0003 | Bridge / CodeMode | T-CM-01 | Entregado |
-| FR-CM-02 execute | ADR-0003, ADR-0004 | Bridge / Sandbox | T-CM-01 | Entregado |
-| FR-CM-03 salida por referencia | ADR-0002 | Almacén de referencias | T-CM-03 | Entregado |
-| FR-CM-04 superficie de la API | ADR-0003 | API `silka` | T-CM-01 | Entregado |
-| FR-CM-05 errores tipados | ADR-0003 | Bridge | T-SEC-01…07 | Entregado |
-| FR-CM-06 esperas en el hub | ADR-0003 | Hub | T-CM-04 | Entregado (probado con hub falso; falta T-CM-04 con hub real) |
-| FR-CM-07 compatibilidad | ADR-0003 | Bridge | Regresión `npm test` + smoke | Entregado |
-| FR-CM-08 versión de la API | ADR-0003 | `silka.d.ts` | T-CM-01 | Entregado |
-| FR-CM-09 auditoría de ejecuciones | — | Bridge | T-SEC-08 | Entregado |
-| FR-TK-01 worktree por tarea | ADR-0005 | Gestor de tareas | T-TK-01 | Entregado |
-| FR-TK-02 validación de la tarea | — | Gestor de tareas | T-TK-01 | Entregado |
-| FR-TK-03 dependencias | — | Gestor de tareas | T-TK-02 | Entregado |
-| FR-TK-04 verify en el worktree | ADR-0005 | Gestor de tareas | T-TK-01 | Entregado |
-| FR-TK-05 ficha | ADR-0002 | Gestor de tareas | T-RV-05 | Entregado |
-| FR-TK-06 riesgo | — | Gestor de tareas | T-TK-03 | Entregado |
-| FR-TK-07 vida del worktree | ADR-0005 | Gestor de tareas | T-TK-05 | Entregado |
-| FR-TK-08 tope de simultaneidad | — | Gestor de tareas | T-CC-09 | Entregado |
-| FR-TK-09 puertos | — | Gestor de tareas | T-CC-09 (D-08) | Entregado (comprobación de puerto libre simplificada) |
-| FR-TK-10 fuera de scope | — | Gestor de tareas | T-TK-03 | Entregado |
-| FR-RV-01…08 bandeja | ADR-0006 | Bandeja (hub, TUI) | T-RV-01…05 | Entregado (FR-RV-07 vista TUI pendiente) |
-| FR-MQ-01 dueño único y fencing | ADR-0006, ADR-0007 | Cola de mezcla | T-MQ-03 | Entregado |
-| FR-MQ-02…05 pasos y fallos | ADR-0006 | Cola de mezcla | T-MQ-01, T-MQ-04 | Entregado (reorden manual FR-MQ-02 pendiente) |
-| FR-MQ-06 sin push ni reescritura | ADR-0006 | Cola de mezcla | Revisión de código + T-MQ-05 | Entregado |
-| FR-MQ-07 recuperación | ADR-0006 | Cola de mezcla + diario | T-MQ-02, T-CC-07 | Entregado |
-| FR-MQ-08, 09 cierre y visibilidad | — | Cola de mezcla, TUI | T-MQ-01 | Entregado (vista TUI pendiente) |
-| FR-CX-01…06 contexto | ADR-0002, ADR-0009 | Paquete de contexto | T-CX-01, T-CX-02 | Entregado |
-| FR-ME-01…04 métricas | ADR-0010 | Métricas | T-ME-01, T-ME-02 | Entregado (línea base con PRs reales pendiente) |
-| NFR-TOK-01 ≥ 70% | ADR-0002, ADR-0003 | Code Mode | T-CM-02 | Estimado ~91% (caracteres/4, lote simulado); falta medición real T-CM-02 |
-| NFR-QUA-01 calidad intacta | ADR-0010 | Métricas + línea base | T-ME-02 | Diseño |
+## 2. Requisito → spec → decisión / componente → prueba → estado
+| Requisito | Spec | Decisión | Componente | Prueba | Estado |
+|---|---|---|---|---|---|
+| FR-CM-01 search | [code-mode](../../openspec/specs/code-mode/spec.md) | ADR-0003 | Bridge / CodeMode | T-CM-01 | Entregado |
+| FR-CM-02 execute | [code-mode](../../openspec/specs/code-mode/spec.md) | ADR-0003, ADR-0004 | Bridge / Sandbox | T-CM-01 | Entregado |
+| FR-CM-03 salida por referencia | [code-mode](../../openspec/specs/code-mode/spec.md) | ADR-0002 | Almacén de referencias | T-CM-03 | Entregado |
+| FR-CM-04 superficie de la API | [code-mode](../../openspec/specs/code-mode/spec.md) | ADR-0003 | API `silka` | T-CM-01 | Entregado |
+| FR-CM-05 errores tipados | [code-mode](../../openspec/specs/code-mode/spec.md) | ADR-0003 | Bridge | T-SEC-01…07 | Entregado |
+| FR-CM-06 esperas en el hub | [code-mode](../../openspec/specs/code-mode/spec.md) | ADR-0003 | Hub | T-CM-04 | Entregado (probado con hub falso; falta T-CM-04 con hub real) |
+| FR-CM-07 compatibilidad | [code-mode](../../openspec/specs/code-mode/spec.md) | ADR-0003 | Bridge | Regresión `npm test` + smoke | Entregado |
+| FR-CM-08 versión de la API | [code-mode](../../openspec/specs/code-mode/spec.md) | ADR-0003 | `silka.d.ts` | T-CM-01 | Entregado |
+| FR-CM-09 auditoría de ejecuciones | [code-mode](../../openspec/specs/code-mode/spec.md) | — | Bridge | T-SEC-08 | Entregado |
+| FR-CM-10 wait lastMessage | [code-mode](../../openspec/specs/code-mode/spec.md) | — | CodeMode / wait-result | codemode.test.mjs | Entregado |
+| FR-TK-01 worktree por tarea | [isolated-tasks](../../openspec/specs/isolated-tasks/spec.md) | ADR-0005 | Gestor de tareas | T-TK-01 | Entregado |
+| FR-TK-02 validación de la tarea | [isolated-tasks](../../openspec/specs/isolated-tasks/spec.md) | — | Gestor de tareas | T-TK-01 | Entregado |
+| FR-TK-03 dependencias | [isolated-tasks](../../openspec/specs/isolated-tasks/spec.md) | — | Gestor de tareas | T-TK-02 | Entregado |
+| FR-TK-04 verify en el worktree | [isolated-tasks](../../openspec/specs/isolated-tasks/spec.md) | ADR-0005 | Gestor de tareas | T-TK-01 | Entregado |
+| FR-TK-05 ficha | [isolated-tasks](../../openspec/specs/isolated-tasks/spec.md) | ADR-0002 | Gestor de tareas | T-RV-05 | Entregado |
+| FR-TK-06 riesgo | [isolated-tasks](../../openspec/specs/isolated-tasks/spec.md) | — | Gestor de tareas | T-TK-03 | Entregado |
+| FR-TK-07 vida del worktree | [isolated-tasks](../../openspec/specs/isolated-tasks/spec.md) | ADR-0005 | Gestor de tareas | T-TK-05 | Entregado |
+| FR-TK-08 tope de simultaneidad | [isolated-tasks](../../openspec/specs/isolated-tasks/spec.md) | — | Gestor de tareas | T-CC-09 | Entregado |
+| FR-TK-09 puertos | [isolated-tasks](../../openspec/specs/isolated-tasks/spec.md) | — | Gestor de tareas | T-CC-09 (D-08) | Entregado (comprobación de puerto libre simplificada) |
+| FR-TK-10 fuera de scope | [isolated-tasks](../../openspec/specs/isolated-tasks/spec.md) | — | Gestor de tareas | T-TK-03 | Entregado |
+| FR-RL-01…04 confiabilidad | [reliability](../../openspec/specs/reliability/spec.md) | — | Gestor + bandeja | reliability.test.mjs | Entregado |
+| FR-RV-01…08 bandeja | [review-inbox](../../openspec/specs/review-inbox/spec.md) | ADR-0006 | Bandeja (hub, TUI) | T-RV-01…05 | Entregado (FR-RV-07 vista TUI pendiente) |
+| FR-MQ-01 dueño único y fencing | [merge-queue](../../openspec/specs/merge-queue/spec.md) | ADR-0006, ADR-0007 | Cola de mezcla | T-MQ-03 | Entregado |
+| FR-MQ-02…05 pasos y fallos | [merge-queue](../../openspec/specs/merge-queue/spec.md) | ADR-0006 | Cola de mezcla | T-MQ-01, T-MQ-04 | Entregado (reorden manual FR-MQ-02 pendiente) |
+| FR-MQ-06 sin push ni reescritura | [merge-queue](../../openspec/specs/merge-queue/spec.md) | ADR-0006 | Cola de mezcla | Revisión de código + T-MQ-05 | Entregado |
+| FR-MQ-07 recuperación | [merge-queue](../../openspec/specs/merge-queue/spec.md) | ADR-0006 | Cola de mezcla + diario | T-MQ-02, T-CC-07 | Entregado |
+| FR-MQ-08, 09 cierre y visibilidad | [merge-queue](../../openspec/specs/merge-queue/spec.md) | — | Cola de mezcla, TUI | T-MQ-01 | Entregado (vista TUI pendiente) |
+| FR-IW-01…05 integración | [integration-waves](../../openspec/specs/integration-waves/spec.md) | — | integration/ | I-WV-01…05 | Entregado |
+| FR-CX-01…06 contexto | [context-metrics](../../openspec/specs/context-metrics/spec.md) | ADR-0002, ADR-0009 | Paquete de contexto | T-CX-01, T-CX-02 | Entregado |
+| FR-ME-01…04 métricas | [context-metrics](../../openspec/specs/context-metrics/spec.md) | ADR-0010 | Métricas | T-ME-01, T-ME-02 | Entregado (línea base con PRs reales pendiente) |
+| FR-HC-01…04 reconexión hub | [hub-connection](../../openspec/specs/hub-connection/spec.md) | — | hub-link | HL-01…08 | Entregado |
+| FR-UI-01…04 rendimiento TUI | [tui](../../openspec/specs/tui/spec.md) | — | ui/ | TP-01…04 | Entregado |
+| NFR-TOK-01 ≥ 70% | [code-mode](../../openspec/specs/code-mode/spec.md) | ADR-0002, ADR-0003 | Code Mode | T-CM-02 | Estimado ~91% (caracteres/4, lote simulado); falta medición real T-CM-02 |
+| NFR-QUA-01 calidad intacta | [context-metrics](../../openspec/specs/context-metrics/spec.md) | ADR-0010 | Métricas + línea base | T-ME-02 | Diseño |
 
 ## 3. Seguridad → amenaza → prueba
 | Control | Amenazas que mitiga | Prueba | Estado |

@@ -15,7 +15,8 @@
     "setup": "node scripts/setup.mjs",
     "smoke": "node scripts/smoke.mjs",
     "test": "node --test test/shim.test.mjs test/state.test.mjs test/notes.test.mjs test/bridge.test.mjs test/format.test.mjs test/transcript.test.mjs test/queue.test.mjs test/send.test.mjs test/models.test.mjs test/concurrency.test.mjs test/codemode.test.mjs test/hub.test.mjs test/hub-link.test.mjs test/tui-perf.test.mjs test/repo-registry.test.mjs test/tasks.test.mjs test/reliability.test.mjs test/review.test.mjs test/merge.test.mjs test/integration-waves.test.mjs test/worktree-setup.test.mjs test/context.test.mjs test/metrics.test.mjs",
-    "silka": "node src/silka/cli.mjs"
+    "silka": "node src/silka/cli.mjs",
+    "spec:validate": "openspec validate --specs --strict"
   },
   "repository": {
     "type": "git",
@@ -26,5 +27,8 @@
     "agent-rack": "0.12.1",
     "ink": "^8.0.0",
     "react": "^19.3.1"
+  },
+  "devDependencies": {
+    "@fission-ai/openspec": "^2.1.1"
   }
 }
