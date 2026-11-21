@@ -29,7 +29,11 @@ import { fileURLToPath } from 'node:url';
 import { readSilkaMark } from '../src/silka/mark.mjs';
 import { silkaConfigDir } from '../src/silka/paths.mjs';
 import { signalProcessTree, trackDescendants, killTracked } from '../src/silka/proc.mjs';
+import { redactSecrets } from '../src/silka/redact.mjs';
 import { beginTurn, finishTurn, oneLine } from '../src/silka/state.mjs';
+import { createTurnLog } from '../src/silka/transcript.mjs';
+
+export { redactSecrets };
 
 export { readSilkaMark };
 
@@ -75,7 +79,12 @@ function attachTurn(agent, rawPrompt) {
       from: trusted ? (mark.from || 'tú') : (process.env.SILKA_AGENT || 'tú'),
       prompt: mark.prompt,
     });
-    return { prompt: turn.prompt, turnId: turn.id };
+    return {
+      prompt: turn.prompt,
+      turnId: turn.id,
+      author: trusted ? (mark.from || 'tú') : (process.env.SILKA_AGENT || 'tú'),
+      userText: mark.prompt,
+    };
   } catch (err) {
     fail(err instanceof Error ? err.message : String(err));
   }
@@ -493,6 +502,8 @@ function opencodeSpec() {
     kind: 'opencode',
     env: silkaChildEnv('opencode', prompt),
     turnId: turned.turnId,
+    author: turned.author,
+    userText: turned.userText,
     promptText: text,
     model: opts.model || '',
   };
@@ -550,6 +561,8 @@ function cursorSpec() {
     kind: 'cursor',
     env: { CURSOR_INVOKED_AS: 'cursor-agent', ...silkaChildEnv('cursor', prompt) },
     turnId: turned.turnId,
+    author: turned.author,
+    userText: turned.userText,
     promptText: turned.prompt,
     model: opts.model || '',
   };
@@ -565,6 +578,7 @@ function runCodex(argv) {
   const args = argv[0] === 'resume' && argv[1] === 'exec' ? ['exec', 'resume', ...argv.slice(2)] : [...argv];
   const rawPrompt = args.at(-1) ?? '';
   const turned = attachTurn('codex', rawPrompt);
+  turnLog = openTurnLog('codex', turned);
   if (args.length) args[args.length - 1] = turned.prompt;
   const child = spawn(l.cmd, [...l.pre, ...args], {
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -594,6 +608,7 @@ function runCodex(argv) {
         trimmed = JSON.stringify(data);
       }
     }
+    if (String(data.type || '') === 'thread.started' && data.thread_id) turnLog.conversation('thread', data.thread_id);
     const kind = classifyCodexEvent(data);
     if (kind.final) {
       if (held.final) {
@@ -612,6 +627,7 @@ function runCodex(argv) {
     if (kind.step) {
       process.stderr.write(`${kind.step}\n`);
       err += `${kind.step}\n`;
+      noteActivity(kind.step);
     }
   };
   child.stdout.on('data', (chunk) => {
@@ -642,17 +658,9 @@ function runCodex(argv) {
     const status = code ? 'failed' : 'done';
     closeTurn(turned.turnId, status, held.text);
     writeLog({ cmd: l.cmd, args, promptText: turned.prompt, kind: 'codex' }, code, out, err);
-    process.exit(code ?? 1);
+    if (held.text) turnLog.agent(held.text);
+    Promise.resolve(turnLog.finish(held.text)).finally(() => process.exit(code ?? 1));
   });
-}
-
-export function redactSecrets(text) {
-  return String(text ?? '')
-    .replace(/nonce=[a-f0-9]{16,}/g, 'nonce=[redactado]')
-    .replace(/\bsk-[A-Za-z0-9_\-]{8,}/g, '[redactado]')
-    .replace(/\b(Bearer\s+)\S+/gi, '$1[redactado]')
-    .replace(/\b(token|api[_-]?key|secret|password)(["']?\s*[:=]\s*["']?)[^\s"',}]+/gi, '$1$2[redactado]')
-    .replace(/\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{5,}/g, '[redactado]');
 }
 
 function clipLog(text, max = 700_000) {
@@ -689,6 +697,38 @@ function writeLog(spec, code, out, err) {
     ].join('\n'));
     fs.writeFileSync(file, body);
   } catch { /* el log es opcional */ }
+}
+
+const noopLog = {
+  tool() {},
+  agent() {},
+  conversation() {},
+  finish() { return Promise.resolve(''); },
+};
+let turnLog = noopLog;
+
+function openTurnLog(agent, turned) {
+  if (!turned?.turnId) return noopLog;
+  return createTurnLog({
+    turnId: turned.turnId,
+    workspace: process.cwd(),
+    agent,
+    author: turned.author,
+    prompt: turned.userText,
+  });
+}
+
+function noteActivity(line) {
+  const text = String(line || '');
+  if (text.startsWith('✎')) turnLog.agent(text.slice(1).trim());
+  else if (text.startsWith('→') || text.startsWith('✗')) {
+    turnLog.tool({
+      name: text.startsWith('✗') ? 'error' : 'tool',
+      target: text.replace(/^[→✗]\s*/, ''),
+      detail: text,
+      line: text,
+    });
+  }
 }
 
 const trackers = new WeakMap();
@@ -734,6 +774,7 @@ function publish(state, lines) {
 }
 
 function runTranslated(spec) {
+  turnLog = openTurnLog(spec.kind, spec);
   const child = spawn(spec.cmd, spec.args, {
     cwd: process.cwd(),
     env: { ...process.env, ...(spec.env || {}) },
@@ -758,6 +799,8 @@ function runTranslated(spec) {
     try { ev = JSON.parse(line); } catch { return; }
     const lines = spec.kind === 'cursor' ? onCursorEvent(ev, state) : onOpencodeEvent(ev, state);
     publish(state, lines);
+    for (const line of lines) noteActivity(line);
+    if (state.session_id) turnLog.conversation(spec.kind === 'cursor' ? 'chat' : 'session', state.session_id);
     armPause();
   };
   child.stdout.on('data', (chunk) => {
@@ -785,7 +828,9 @@ function runTranslated(spec) {
       ? finishCursor(state, out, err, spec.model)
       : finishOpencode(state, spec.model);
     closeTurn(spec.turnId, result.is_error ? 'failed' : 'done', result.result);
-    emit(result, result.is_error ? (code || 1) : 0);
+    Promise.resolve(turnLog.finish(result.result)).finally(() => {
+      emit(result, result.is_error ? (code || 1) : 0);
+    });
   });
 }
 

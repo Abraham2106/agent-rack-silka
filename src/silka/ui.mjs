@@ -1,40 +1,23 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Box, Text, render, useApp, useInput, useStdout } from 'ink';
 import { redirectSession } from './commands.mjs';
-import { activityFromEvents, clip, formatDuration, isBusy, nestSessions, originLabel, promptPreview, shortId, statusColor, statusIcon } from './format.mjs';
+import { clip, isBusy, nestSessions } from './format.mjs';
 import { readMeta, rememberSession } from './hub.mjs';
 import { appendNote, unreadSessionIds } from './notes.mjs';
 import { readOrigins } from './origin.mjs';
-import { matchTaskSession, refreshConflicts, samePath, workspaceReport } from './state.mjs';
+import { enqueueMessage, listQueue, removeQueued } from './queue.mjs';
+import { matchTaskSession, readStore, refreshConflicts, samePath, workspaceReport } from './state.mjs';
+import { readConversation } from './transcript.mjs';
+import { buildChatRows, flattenChatRows, renderChat } from './ui/chat.mjs';
+import { renderComposer } from './ui/entry.mjs';
+import { renderHelp } from './ui/help.mjs';
+import { renderSessionList } from './ui/list.mjs';
+import { renderEstado } from './ui/status.mjs';
 
 const h = React.createElement;
 
-function snapshotQueues(queues) {
-  const out = {};
-  for (const [id, items] of Object.entries(queues)) {
-    if (items?.length) out[id] = [...items];
-  }
-  return out;
-}
-
-function wrapBlock(text, width, maxLines) {
-  const clean = String(text ?? '').replace(/\s+/g, ' ').trim();
-  if (!clean || maxLines <= 0 || width <= 0) return [];
-  const lines = [];
-  let rest = clean;
-  while (rest && lines.length < maxLines) {
-    if (rest.length <= width) {
-      lines.push(rest);
-      rest = '';
-      break;
-    }
-    let cut = rest.lastIndexOf(' ', width);
-    if (cut < Math.floor(width * 0.4)) cut = width;
-    lines.push(rest.slice(0, cut).trimEnd());
-    rest = rest.slice(cut).trimStart();
-  }
-  if (rest && lines.length) lines[lines.length - 1] = clip(`${lines[lines.length - 1]}…`, width);
-  return lines;
+function pendingQueue(sessionId) {
+  return listQueue(sessionId).filter((item) => item.status === 'pending');
 }
 
 export function App({ client, port, agents, models = {} }) {
@@ -44,9 +27,10 @@ export function App({ client, port, agents, models = {} }) {
   const columns = Math.max(60, stdout?.columns ?? 100);
   const [sessions, setSessions] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
-  const [log, setLog] = useState({ id: null, lines: [] });
+  const [chat, setChat] = useState({ id: null, events: [] });
   const [draft, setDraft] = useState('');
   const [field, setField] = useState('');
+  const [query, setQuery] = useState('');
   const [queues, setQueues] = useState({});
   const [banner, setBanner] = useState(null);
   const [meta, setMeta] = useState(() => readMeta(port));
@@ -57,36 +41,47 @@ export function App({ client, port, agents, models = {} }) {
   const [wizard, setWizard] = useState(null);
   const [board, setBoard] = useState(null);
   const [hotIds, setHotIds] = useState(() => new Set());
+  const [listHidden, setListHidden] = useState(false);
+  const [expanded, setExpanded] = useState(() => new Set());
+  const [focus, setFocus] = useState(0);
+  const [pinned, setPinned] = useState(true);
 
   const sessionsRef = useRef([]);
   const selectedIdRef = useRef(null);
   const draftRef = useRef('');
   const fieldRef = useRef('');
-  const queuesRef = useRef({});
-  const inflightRef = useRef({});
+  const queryRef = useRef('');
   const wizardRef = useRef(null);
   const modeRef = useRef('main');
   const orderRef = useRef([]);
+  const editingRef = useRef(false);
+  const listHiddenRef = useRef(false);
+  const pinnedRef = useRef(true);
+  const focusRef = useRef(0);
+  const rowsRef = useRef([]);
 
   sessionsRef.current = sessions;
   selectedIdRef.current = selectedId;
   draftRef.current = draft;
   fieldRef.current = field;
+  queryRef.current = query;
   wizardRef.current = wizard;
   modeRef.current = mode;
-
-  function publishQueues() {
-    setQueues(snapshotQueues(queuesRef.current));
-  }
-
-  function enqueue(id, message) {
-    if (!queuesRef.current[id]) queuesRef.current[id] = [];
-    queuesRef.current[id].push(message);
-    publishQueues();
-  }
+  listHiddenRef.current = listHidden;
+  pinnedRef.current = pinned;
+  focusRef.current = focus;
 
   function fail(err) {
     setBanner({ text: err instanceof Error ? err.message : String(err), color: 'red' });
+  }
+
+  function publishQueues(sessionsNow = sessionsRef.current) {
+    const next = {};
+    for (const session of sessionsNow) {
+      const items = listQueue(session.sessionId).filter((item) => item.status !== 'delivered');
+      if (items.length) next[session.sessionId] = items;
+    }
+    setQueues(next);
   }
 
   useEffect(() => {
@@ -112,6 +107,7 @@ export function App({ client, port, agents, models = {} }) {
         setOrigins(readOrigins());
         setNoted(unreadSessionIds());
         setHubOk(true);
+        publishQueues(sessionsNow);
         const dirs = new Set();
         const selectedNow = sessionsNow.find((session) => session.sessionId === selectedIdRef.current) ?? sessionsNow[0];
         if (selectedNow?.workspace) dirs.add(selectedNow.workspace);
@@ -138,41 +134,21 @@ export function App({ client, port, agents, models = {} }) {
         if (!dirs.size) setBoard(null);
         setHotIds(hot);
 
-        for (const session of sessionsNow) {
-          const id = session.sessionId;
-          const flight = inflightRef.current[id];
-          const busy = isBusy(session.status);
-          if (flight) {
-            if (busy || (session.turnCount ?? 0) > flight.turn) flight.seen = true;
-            if ((flight.seen && !busy) || (!flight.seen && Date.now() - flight.at > 8000)) {
-              delete inflightRef.current[id];
-            }
-          }
-          const queued = queuesRef.current[id];
-          if (!queued?.length || inflightRef.current[id] || busy) continue;
-          const message = queued[0];
-          try {
-            await client.sendInput(id, message);
-            if (queued[0] === message) queued.shift();
-            inflightRef.current[id] = { turn: session.turnCount ?? 0, seen: false, at: Date.now() };
-            if (!cancel) publishQueues();
-          } catch (err) {
-            const detail = err instanceof Error ? err.message : String(err);
-            if (/is still (running|cancelling)|still running/i.test(detail)) continue;
-            if (!cancel) fail(err);
-          }
-        }
-
         const currentId = selectedIdRef.current;
         const current = sessionsNow.find((session) => session.sessionId === currentId) ?? sessionsNow[0];
         if (!current) {
-          if (!cancel) setLog({ id: null, lines: [] });
+          if (!cancel) setChat({ id: null, events: [] });
           return;
         }
-        const page = await client.getSessionLogTail(current.sessionId, 80);
-        if (cancel || selectedIdRef.current !== current.sessionId && selectedIdRef.current) return;
-        const events = Array.isArray(page?.events) ? page.events : [];
-        setLog({ id: current.sessionId, lines: activityFromEvents(events) });
+        let tasks = [];
+        if (current.workspace) {
+          try {
+            tasks = readStore(current.workspace).tasks.map((task) => ({ ...task, workspace: task.workspace || current.workspace }));
+          } catch { tasks = []; }
+        }
+        const events = readConversation(current.sessionId, { tasks, sessions: sessionsNow });
+        if (cancel || selectedIdRef.current && selectedIdRef.current !== current.sessionId) return;
+        setChat({ id: current.sessionId, events });
       } catch (err) {
         if (!cancel) {
           setHubOk(false);
@@ -191,31 +167,84 @@ export function App({ client, port, agents, models = {} }) {
     };
   }, [client, port]);
 
-  async function submitDraft() {
+  function enqueueDraft() {
     const id = selectedIdRef.current;
     const text = draftRef.current.trim();
     if (!id) {
       setBanner({ text: 'No hay sesión seleccionada.', color: 'red' });
       return;
     }
-    if (!text) return;
-    setDraft('');
+    if (!text) return false;
     const session = sessionsRef.current.find((item) => item.sessionId === id);
-    if (session && isBusy(session.status)) {
-      enqueue(id, text);
-      setBanner({ text: 'En cola: se envía al terminar el turno.', color: 'yellow' });
-      return;
+    if (session?.status === 'cancelled') {
+      setBanner({ text: 'La sesión está cancelada.', color: 'red' });
+      return false;
     }
     try {
-      await client.sendInput(id, text);
-      inflightRef.current[id] = { turn: session?.turnCount ?? 0, seen: false, at: Date.now() };
+      enqueueMessage(id, { author: 'tú', text });
+      editingRef.current = false;
+      setDraft('');
+      setPinned(true);
+      publishQueues();
+      setBanner({ text: 'En cola: se envía al terminar el turno.', color: 'yellow' });
+      return true;
     } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err);
-      if (/is still (running|cancelling)|still running/i.test(detail)) {
-        enqueue(id, text);
-        setBanner({ text: 'En cola: se envía al terminar el turno.', color: 'yellow' });
-      } else fail(err);
+      fail(err);
+      return false;
     }
+  }
+
+  function editLastQueued() {
+    const id = selectedIdRef.current;
+    if (!id || draftRef.current.trim()) return false;
+    const last = pendingQueue(id).at(-1);
+    if (!last) return false;
+    removeQueued(id, last.id);
+    editingRef.current = true;
+    setDraft(last.text);
+    publishQueues();
+    return true;
+  }
+
+  function dropQueued() {
+    const id = selectedIdRef.current;
+    if (!id) return;
+    if (editingRef.current || draftRef.current.trim()) {
+      editingRef.current = false;
+      setDraft('');
+      return;
+    }
+    const last = pendingQueue(id).at(-1);
+    if (!last) return;
+    removeQueued(id, last.id);
+    publishQueues();
+    setBanner({ text: 'Mensaje quitado de la cola.', color: 'yellow' });
+  }
+
+  function toggleTool() {
+    const list = rowsRef.current;
+    const index = pinnedRef.current ? list.length - 1 : focusRef.current;
+    const row = list[index];
+    if (!row?.toolId || (row.kind !== 'tool' && row.kind !== 'detail')) return false;
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (next.has(row.toolId)) next.delete(row.toolId);
+      else next.add(row.toolId);
+      return next;
+    });
+    setPinned(false);
+    return true;
+  }
+
+  function moveChat(delta) {
+    const last = Math.max(0, rowsRef.current.length - 1);
+    const base = pinnedRef.current ? last : focusRef.current;
+    const next = Math.min(last, Math.max(0, base + delta));
+    focusRef.current = next;
+    setFocus(next);
+    const atEnd = next >= last;
+    pinnedRef.current = atEnd;
+    setPinned(atEnd);
   }
 
   async function cancelSelected() {
@@ -226,11 +255,7 @@ export function App({ client, port, agents, models = {} }) {
     }
     try {
       await client.cancelSession(id);
-      if (queuesRef.current[id]) {
-        queuesRef.current[id] = [];
-        publishQueues();
-      }
-      setBanner({ text: `Cancelando ${shortId(id)}.`, color: 'yellow' });
+      setBanner({ text: `Cancelando ${id.slice(0, 8)}.`, color: 'yellow' });
     } catch (err) {
       fail(err);
     }
@@ -252,7 +277,7 @@ export function App({ client, port, agents, models = {} }) {
       setMeta(readMeta(port));
       setSelectedId(sessionId);
       setWizard(null);
-      setBanner({ text: `Sesión ${shortId(sessionId)} creada.`, color: 'green' });
+      setBanner({ text: `Sesión ${sessionId.slice(0, 8)} creada.`, color: 'green' });
     } catch (err) {
       fail(err);
     }
@@ -288,7 +313,7 @@ export function App({ client, port, agents, models = {} }) {
       const createdId = await redirectSession(client, status, session, text);
       setMeta(readMeta(port));
       setSelectedId(createdId);
-      setBanner({ text: `Redirigida ${shortId(session.sessionId)} → ${shortId(createdId)}.`, color: 'green' });
+      setBanner({ text: `Redirigida ${session.sessionId.slice(0, 8)} → ${createdId.slice(0, 8)}.`, color: 'green' });
     } catch (err) {
       fail(err);
     }
@@ -309,6 +334,23 @@ export function App({ client, port, agents, models = {} }) {
     if (currentMode === 'confirm') {
       if (input === 's' || input === 'S' || input === 'y' || input === 'Y') void cancelSelected();
       setMode('main');
+      return;
+    }
+    if (currentMode === 'search') {
+      if (key.escape) {
+        setQuery('');
+        setMode('main');
+        return;
+      }
+      if (key.return) {
+        setMode('main');
+        return;
+      }
+      if (key.backspace || key.delete) {
+        setQuery((value) => value.slice(0, -1));
+        return;
+      }
+      if (input && !key.ctrl && !key.meta) setQuery((value) => value + input);
       return;
     }
     if (currentMode === 'steer' || currentMode === 'note') {
@@ -376,24 +418,67 @@ export function App({ client, port, agents, models = {} }) {
       return;
     }
 
+    if (key.ctrl && (input === 'b' || input === 'B' || input === '\u0002')) {
+      setListHidden((value) => !value);
+      return;
+    }
     if (banner) setBanner(null);
+
+    if (key.pageUp) {
+      moveChat(-1);
+      return;
+    }
+    if (key.pageDown) {
+      moveChat(1);
+      return;
+    }
+    if (key.escape) {
+      dropQueued();
+      return;
+    }
+
     const list = orderRef.current.length ? orderRef.current : sessionsRef.current.map((session) => ({ session, depth: 0 }));
-    if (key.upArrow || key.downArrow) {
+    if (key.upArrow) {
+      if (!draftRef.current.trim() && editLastQueued()) return;
       if (draftRef.current.trim()) return;
+      if (listHiddenRef.current) {
+        moveChat(-1);
+        return;
+      }
       if (!list.length) return;
       let index = list.findIndex((item) => item.session.sessionId === selectedIdRef.current);
       if (index < 0) index = 0;
-      const delta = key.upArrow ? -1 : 1;
-      const next = list[Math.min(list.length - 1, Math.max(0, index + delta))];
+      const next = list[Math.max(0, index - 1)];
       setSelectedId(next.session.sessionId);
+      setPinned(true);
+      return;
+    }
+    if (key.downArrow) {
+      if (draftRef.current.trim()) return;
+      if (listHiddenRef.current) {
+        moveChat(1);
+        return;
+      }
+      if (!list.length) return;
+      let index = list.findIndex((item) => item.session.sessionId === selectedIdRef.current);
+      if (index < 0) index = 0;
+      const next = list[Math.min(list.length - 1, index + 1)];
+      setSelectedId(next.session.sessionId);
+      setPinned(true);
       return;
     }
     if (key.return) {
-      void submitDraft();
+      if (draftRef.current.trim()) enqueueDraft();
+      else toggleTool();
       return;
     }
     if (key.backspace || key.delete) {
       setDraft((value) => value.slice(0, -1));
+      return;
+    }
+    if (input === '/' && draftRef.current === '' && !key.ctrl) {
+      setQuery('');
+      setMode('search');
       return;
     }
     if (input === '?' && draftRef.current === '' && !key.ctrl) {
@@ -446,215 +531,43 @@ export function App({ client, port, agents, models = {} }) {
   });
 
   const selected = sessions.find((session) => session.sessionId === selectedId) ?? sessions[0] ?? null;
-  const leftWidth = Math.max(28, Math.min(40, Math.floor(columns * 0.38)));
+  const leftWidth = listHidden ? 0 : Math.max(28, Math.min(40, Math.floor(columns * 0.38)));
   const rightWidth = Math.max(20, columns - leftWidth);
-  const innerLeft = Math.max(8, leftWidth - 4);
-  const innerRight = Math.max(8, rightWidth - 4);
-  const selectedMeta = selected ? meta[selected.sessionId] : null;
   const queued = selected ? queues[selected.sessionId] ?? [] : [];
-  const activity = log.id && selected && log.id === selected.sessionId ? log.lines : [];
-  const summaryText = selected && !isBusy(selected.status) ? String(selected.summary || '').trim() : '';
+  const events = chat.id && selected && chat.id === selected.sessionId ? chat.events : [];
 
-  let composerInner = 1;
+  let composerInner = 2;
   if (wizard?.step === 'agent') composerInner = 1 + Math.max(agents.length, 1);
-  else if (wizard?.step === 'model' || mode === 'confirm') composerInner = 2;
+  else if (wizard?.step === 'model' || mode === 'confirm' || mode === 'search') composerInner = 2;
   else if (wizard?.step === 'prompt') composerInner = 4;
   else if (mode === 'steer' || mode === 'note') composerInner = 2;
   const composerH = Math.min(composerInner + 2, Math.max(3, rows - 8));
   const bodyH = Math.max(1, rows - composerH - 3);
   const ordered = nestSessions(sessions, origins, meta);
   orderRef.current = ordered;
-  const listRoom = Math.max(1, bodyH - 3);
-  const visibleCount = Math.max(1, Math.floor(listRoom / 2));
-  let selectedIndex = ordered.findIndex((item) => item.session.sessionId === selected?.sessionId);
-  if (selectedIndex < 0) selectedIndex = 0;
-  let windowStart = 0;
-  if (ordered.length > visibleCount) {
-    windowStart = Math.min(Math.max(0, selectedIndex - Math.floor(visibleCount / 2)), ordered.length - visibleCount);
-  }
-  const visibleSessions = ordered.slice(windowStart, windowStart + visibleCount);
 
-  const rightInner = Math.max(1, bodyH - 2);
-  const summaryBudget = summaryText ? Math.min(5, Math.max(2, Math.floor(rightInner / 3))) : 0;
-  const queueBudget = queued.length ? Math.min(3, 1 + queued.length) : 0;
-  const activityBudget = Math.max(1, rightInner - 3 - queueBudget - summaryBudget);
-  const visibleActivity = activity.slice(-activityBudget).map((line) => clip(line, innerRight));
-  const summaryLines = wrapBlock(summaryText, innerRight, Math.max(0, summaryBudget - 1));
+  const flatRows = flattenChatRows(buildChatRows(events, queued, query), expanded);
+  rowsRef.current = flatRows;
 
   const sessionLabel = `${sessions.length} ${sessions.length === 1 ? 'sesión' : 'sesiones'}`;
-
-  const sessionRows = visibleSessions.map(({ session, depth }) => {
-    const active = selected?.sessionId === session.sessionId;
-    const info = meta[session.sessionId] || {};
-    const model = info.model || models[session.agentId] || '';
-    const origin = originLabel(origins[session.sessionId]);
-    const marks = `${queues[session.sessionId]?.length ? 'Q' : ''}${noted.has(session.sessionId) ? 'N' : ''}${hotIds.has(session.sessionId) ? '!' : ''}`;
-    const indent = depth ? `${'  '.repeat(Math.min(depth, 4))}↳ ` : '';
-    const head = clip(
-      `${indent}${statusIcon(session.status)} ${shortId(session.sessionId)} ${session.agentId}${marks ? ` ${marks}` : ''} ${origin} ${formatDuration(session)}`,
-      innerLeft,
-    );
-    const sub = info.steeredFrom
-      ? clip(`↳ ${shortId(info.steeredFrom)} · ${promptPreview(info.prompt || session.summary || '') || 'sigue el trabajo'}`, innerLeft)
-      : clip([model, promptPreview(info.prompt || session.summary || '')].filter(Boolean).join(' · ') || 'sin prompt', innerLeft);
-    return h(
-      Box,
-      { key: session.sessionId, flexDirection: 'column' },
-      h(Text, { inverse: active, color: active ? undefined : statusColor(session.status), wrap: 'truncate' }, head),
-      h(Text, { inverse: active, dimColor: !active, wrap: 'truncate' }, sub),
-    );
-  });
-
-  let composer;
-  if (mode === 'help') {
-    composer = h(Text, { wrap: 'truncate' }, 'Ayuda abierta. esc cierra.');
-  } else if (mode === 'confirm') {
-    composer = h(
-      Box,
-      { flexDirection: 'column' },
-      h(Text, { color: 'yellow' }, `Cancelar ${selected ? shortId(selected.sessionId) : ''}?`),
-      h(Text, { dimColor: true, wrap: 'truncate' }, 's confirma · cualquier otra tecla vuelve'),
-    );
-  } else if (mode === 'steer' || mode === 'note') {
-    const label = mode === 'steer' ? 'Redirigir' : 'Nota para el manager';
-    composer = h(
-      Box,
-      { flexDirection: 'column' },
-      h(Text, { dimColor: true, wrap: 'truncate' }, `${label} · enter guarda · esc cancela`),
-      h(Text, { wrap: 'truncate' }, clip(`${field}█`, columns - 4)),
-    );
-  } else if (wizard?.step === 'agent') {
-    composer = h(
-      Box,
-      { flexDirection: 'column' },
-      h(Text, { bold: true }, 'Nueva sesión · elige agente'),
-      ...agents.map((agent, index) => h(
-        Text,
-        { key: agent, inverse: index === wizard.index, wrap: 'truncate' },
-        index === wizard.index ? `▸ ${agent}` : `  ${agent}`,
-      )),
-    );
-  } else if (wizard?.step === 'model') {
-    composer = h(
-      Box,
-      { flexDirection: 'column' },
-      h(Text, { dimColor: true, wrap: 'truncate' }, `Modelo para ${wizard.agent} · enter lo deja vacío · esc vuelve`),
-      h(Text, { wrap: 'truncate' }, `${wizard.model}█`),
-    );
-  } else if (wizard?.step === 'prompt') {
-    const promptLines = (wizard.prompt || ' ').split('\n');
-    const shown = promptLines.slice(-Math.max(1, composerH - 3));
-    composer = h(
-      Box,
-      { flexDirection: 'column' },
-      h(Text, { dimColor: true, wrap: 'truncate' }, `Prompt de ${wizard.agent} · enter línea · Ctrl+S envía · esc vuelve`),
-      ...shown.map((line, index) => h(Text, { key: `${index}:${line}`, wrap: 'truncate' }, clip(index === shown.length - 1 ? `${line}█` : line, columns - 4))),
-    );
-  } else {
-    composer = h(Text, { wrap: 'truncate' }, clip(`› ${draft}█`, columns - 4));
-  }
-
-  const helpRows = [
-    '↑↓        elegir sesión',
-    'enter     enviar mensaje (si sigue en curso, queda en cola)',
-    'n         nueva sesión: agente, modelo opcional, prompt',
-    '          en el prompt, enter es otra línea y Ctrl+S envía',
-    'i         redirigir: cancela y sigue con una instrucción nueva',
-    'm         nota para el manager (silka_notes)',
-    'e         estado del workspace: rama, tareas, conflictos, decisiones',
-    'c         cancelar, pide confirmación',
-    '?         esta ayuda',
-    'q         salir',
-    'Q en la lista: hay mensajes en cola.  N: hay notas sin leer.  !: conflicto de archivos.',
-    '↳ une la sesión nueva con la que redirigiste, o una hija bajo quien la lanzó.',
-    'El origen (tú, claude-code, codex…) dice quién abrió la sesión.',
-  ];
-
-  const estadoLines = [];
-  if (board) {
-    estadoLines.push(board.repo
-      ? `${board.repo.branch}  @  ${board.repo.head ? board.repo.head.slice(0, 7) : 'sin commits'}`
-      : 'sin repo git');
-    if (board.graph) estadoLines.push(board.graph);
-    const conflicts = (board.conflicts || []).filter((conflict) => Date.now() - Date.parse(conflict.at) < 6 * 60 * 60 * 1000);
-    estadoLines.push(conflicts.length ? 'Conflictos' : 'Conflictos  ninguno');
-    for (const conflict of conflicts.slice(0, 4)) estadoLines.push(`! ${conflict.file}`);
-    estadoLines.push('Tareas');
-    const tasks = [...(board.tasks || [])].sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt))).slice(0, 8);
-    if (!tasks.length) estadoLines.push('sin tareas registradas');
-    for (const task of tasks) {
-      const files = [...(task.files || []), ...(task.ambiguous || []).map((file) => `${file}?`)]
-        .filter((file) => !file.startsWith('.silka/') && !file.startsWith('.git/') && !file.startsWith('graphify-out/'))
-        .slice(0, 4)
-        .join(', ');
-      estadoLines.push(`${task.status === 'running' ? '▶' : '●'} ${task.agent} ${task.from || ''} ${files || 'sin archivos'}`);
-      if (task.summary) estadoLines.push(`  ${task.summary}`);
-    }
-    estadoLines.push('Decisiones');
-    if (!board.decisions?.length) estadoLines.push('sin decisiones');
-    for (const decision of (board.decisions || []).slice(0, 3)) estadoLines.push(`${decision.author}: ${decision.text}`);
-  } else {
-    estadoLines.push('Sin workspace seleccionado.');
-  }
-
   const panels = mode === 'estado'
-    ? h(
-      Box,
-      { flexGrow: 1, height: bodyH, borderStyle: 'single', borderColor: 'gray', paddingX: 1, flexDirection: 'column', overflow: 'hidden' },
-      h(Text, { bold: true }, 'Estado'),
-      ...estadoLines.slice(0, Math.max(1, bodyH - 3)).map((line, index) => h(
-        Text,
-        { key: `estado-${index}`, color: line.startsWith('!') ? 'red' : undefined, dimColor: line.startsWith('  '), wrap: 'truncate' },
-        clip(line, columns - 4),
-      )),
-    )
+    ? renderEstado(h, Box, Text, { height: bodyH, columns, board })
     : mode === 'help'
-    ? h(
-      Box,
-      { flexGrow: 1, height: bodyH, borderStyle: 'single', borderColor: 'gray', paddingX: 1, flexDirection: 'column', overflow: 'hidden' },
-      h(Text, { bold: true }, 'Ayuda'),
-      ...helpRows.slice(0, Math.max(1, bodyH - 3)).map((line) => h(Text, { key: line, wrap: 'truncate' }, clip(line, columns - 4))),
-    )
-    : h(
-      Box,
-      { flexGrow: 1, height: bodyH, overflow: 'hidden' },
-      h(
+      ? renderHelp(h, Box, Text, { height: bodyH, columns })
+      : h(
         Box,
-        { width: leftWidth, height: bodyH, flexDirection: 'column', borderStyle: 'single', borderColor: 'gray', paddingX: 1, overflow: 'hidden' },
-        h(Text, { bold: true }, ordered.length > visibleCount ? `Sesiones ${windowStart + 1}-${windowStart + visibleSessions.length}/${ordered.length}` : 'Sesiones'),
-        sessions.length ? sessionRows : h(Text, { dimColor: true }, 'Sin sesiones. n crea una.'),
-      ),
-      h(
-        Box,
-        { width: rightWidth, height: bodyH, flexDirection: 'column', borderStyle: 'single', borderColor: 'gray', paddingX: 1, overflow: 'hidden' },
-        selected
-          ? h(
-            Text,
-            { bold: true, wrap: 'truncate' },
-            `${statusIcon(selected.status)} ${selected.agentId} `,
-            h(Text, { color: statusColor(selected.status) }, selected.status),
-            `  ${shortId(selected.sessionId)}  `,
-            h(Text, { dimColor: true }, originLabel(origins[selected.sessionId])),
-          )
-          : h(Text, { bold: true }, 'Actividad'),
-        h(Text, { dimColor: true, wrap: 'truncate' }, selectedMeta?.steeredFrom ? `viene de ${shortId(selectedMeta.steeredFrom)}` : `origen ${selected ? originLabel(origins[selected.sessionId]) : ''}`),
-        h(
-          Text,
-          { dimColor: true, wrap: 'truncate' },
-          clip(selected ? (selectedMeta?.prompt || selected.summary || selected.workspace || '') : '', innerRight) || ' ',
-        ),
-        visibleActivity.length
-          ? visibleActivity.map((line, index) => h(Text, { key: `${activity.length - visibleActivity.length + index}:${line}`, wrap: 'truncate' }, line || ' '))
-          : h(Text, { dimColor: true }, selected ? 'Sin actividad todavía.' : 'Elige o crea una sesión.'),
-        queueBudget
-          ? h(Text, { color: 'yellow', wrap: 'truncate' }, clip(`en cola  ${queued.map((message, index) => `${index + 1}. ${message}`).join('  ')}`, innerRight))
-          : null,
-        summaryBudget
-          ? h(Text, { dimColor: true }, 'resumen')
-          : null,
-        ...summaryLines.map((line, index) => h(Text, { key: `sum-${index}`, wrap: 'truncate' }, line)),
-      ),
-    );
+        { flexGrow: 1, height: bodyH, overflow: 'hidden' },
+        listHidden ? null : renderSessionList(h, Box, Text, {
+          ordered, selectedId: selected?.sessionId, meta, models, origins, noted, hotIds, queues,
+          width: leftWidth, height: bodyH,
+        }),
+        renderChat(h, Box, Text, {
+          session: selected, meta, origins, models, events, queued,
+          width: listHidden ? columns : rightWidth,
+          height: bodyH,
+          query, expanded, focus, pinned,
+        }),
+      );
 
   return h(
     Box,
@@ -666,6 +579,7 @@ export function App({ client, port, agents, models = {} }) {
       `   hub :${port}   `,
       h(Text, { color: hubOk ? 'green' : 'red' }, hubOk ? '● vivo' : '● caído'),
       `   ${sessionLabel}`,
+      listHidden ? '   chat' : '',
     ),
     panels,
     h(
@@ -673,10 +587,10 @@ export function App({ client, port, agents, models = {} }) {
       { height: composerH, borderStyle: 'single', borderColor: 'gray', paddingX: 1, flexDirection: 'column', overflow: 'hidden' },
       mode === 'estado'
         ? h(Text, { dimColor: true, wrap: 'truncate' }, 'Estado del proyecto · e o esc vuelve')
-        : composer,
+        : renderComposer(h, Box, Text, { mode, draft, field, wizard, agents, columns, selected, query }),
     ),
     h(Text, { color: banner?.color || undefined, wrap: 'truncate' }, banner ? clip(banner.text, columns) : ' '),
-    h(Text, { dimColor: true, wrap: 'truncate' }, clip('↑↓ elegir   enter envía   n nueva   e estado   i redirigir   m nota   c cancelar   ? ayuda   q salir', columns)),
+    h(Text, { dimColor: true, wrap: 'truncate' }, clip('↑↓ elegir   enter encola   n nueva   e estado   i redirigir   m nota   c cancelar   ? ayuda   q salir', columns)),
   );
 }
 

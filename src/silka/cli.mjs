@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { listSessionsCommand, noteSession, runSession, sendMessage, steerSession } from './commands.mjs';
+import { listSessionsCommand, noteSession, queueCommand, runSession, sendMessage, steerSession } from './commands.mjs';
 import { startHub, withClient } from './hub.mjs';
 
 function printHelp() {
@@ -9,6 +9,7 @@ function printHelp() {
   silka ls
   silka run <agente> "<prompt>" [--model m] [--workspace dir]
   silka send <id> "<mensaje>"
+  silka queue <id> [--clear]
   silka steer <id> "<instrucción>"
   silka note <id> "<texto>"
   silka ui
@@ -71,7 +72,7 @@ async function main() {
     console.log(text);
     return;
   }
-  if (!['ls', 'run', 'send', 'steer', 'note', 'ui'].includes(cmd)) {
+  if (!['ls', 'run', 'send', 'queue', 'steer', 'note', 'ui'].includes(cmd)) {
     printHelp();
     throw new Error(`Comando desconocido: ${cmd}`);
   }
@@ -79,6 +80,7 @@ async function main() {
     if (cmd === 'ls') return listSessionsCommand(client, status.port);
     if (cmd === 'run') return runSession(client, status, argv.slice(1));
     if (cmd === 'send') return sendMessage(client, argv.slice(1));
+    if (cmd === 'queue') return queueCommand(client, argv.slice(1));
     if (cmd === 'steer') return steerSession(client, status, argv.slice(1));
     if (cmd === 'note') return noteSession(client, argv.slice(1));
     const { runUi } = await import('./ui.mjs');

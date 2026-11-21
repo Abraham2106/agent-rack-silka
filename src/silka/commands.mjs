@@ -3,6 +3,7 @@ import { formatDuration, isBusy, originLabel, pad, promptPreview, shortId } from
 import { readMeta, readPrompts, rememberSession } from './hub.mjs';
 import { appendNote } from './notes.mjs';
 import { readOrigins } from './origin.mjs';
+import { clearQueue, enqueueMessage, listQueue } from './queue.mjs';
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -137,48 +138,38 @@ export async function noteSession(client, argv) {
   console.log(note.id);
 }
 
-function stillRunning(message) {
-  return /is still (running|cancelling)|still running/i.test(message);
-}
-
 export async function sendMessage(client, argv) {
   const { positional } = parseArgs(argv);
   const id = positional[0];
   const message = positional.slice(1).join(' ').trim();
   if (!id || !message) throw new Error('Uso: silka send <id> "<mensaje>"');
-
-  const deadline = Date.now() + 15 * 60 * 1000;
-  let announced = false;
-  while (Date.now() < deadline) {
-    const sessions = await client.listSessions();
-    const session = matchSession(Array.isArray(sessions) ? sessions : [], id);
-    if (session.status === 'cancelled') {
-      throw new Error(`La sesión ${shortId(session.sessionId)} fue cancelada.`);
-    }
-    if (isBusy(session.status)) {
-      if (!announced) {
-        console.error('en cola: esperando a que termine el turno…');
-        announced = true;
-      }
-      await sleep(1000);
-      continue;
-    }
-    try {
-      await client.sendInput(session.sessionId, message);
-      console.log(`enviado ${shortId(session.sessionId)}`);
-      return;
-    } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err);
-      if (stillRunning(detail)) {
-        if (!announced) {
-          console.error('en cola: esperando a que termine el turno…');
-          announced = true;
-        }
-        await sleep(1000);
-        continue;
-      }
-      throw err;
-    }
+  const sessions = await client.listSessions();
+  const session = matchSession(Array.isArray(sessions) ? sessions : [], id);
+  if (session.status === 'cancelled') {
+    throw new Error(`La sesión ${shortId(session.sessionId)} fue cancelada.`);
   }
-  throw new Error('Tiempo de espera agotado antes de poder enviar.');
+  const item = enqueueMessage(session.sessionId, { author: 'tú', text: message });
+  console.log(`en cola ${item.id} ${shortId(session.sessionId)}`);
+}
+
+export async function queueCommand(client, argv) {
+  const clear = argv.includes('--clear');
+  const positional = argv.filter((arg) => !arg.startsWith('--'));
+  const id = positional[0];
+  if (!id) throw new Error('Uso: silka queue <id> [--clear]');
+  const sessions = await client.listSessions();
+  const session = matchSession(Array.isArray(sessions) ? sessions : [], id);
+  if (clear) {
+    const count = clearQueue(session.sessionId);
+    console.log(`cola vacía ${shortId(session.sessionId)} (${count})`);
+    return;
+  }
+  const items = listQueue(session.sessionId);
+  if (!items.length) {
+    console.log('Cola vacía.');
+    return;
+  }
+  for (const item of items) {
+    console.log(`${String(item.id).slice(0, 8)}  ${item.author}  ${item.status}  ${item.text}`);
+  }
 }

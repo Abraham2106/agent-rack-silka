@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { DashboardRemoteClient } from 'agent-rack/dist/cli/dashboard/remoteClient.js';
 import { DEFAULT_SSE_PORT } from 'agent-rack/dist/config/schema.js';
 import { tokenFilePath } from 'agent-rack/dist/security/auth.js';
+import { startQueueDispatcher } from './dispatch.mjs';
 import { withFileLock, writeAtomic } from './lock.mjs';
 import { signalProcessTree } from './proc.mjs';
 
@@ -23,7 +24,9 @@ export function repoRoot() {
 
 export function loadSilkaConfig() {
   const root = repoRoot();
-  const configPath = path.join(root, 'agent-rack.config.json');
+  const configPath = process.env.SILKA_CONFIG
+    ? path.resolve(process.env.SILKA_CONFIG)
+    : path.join(root, 'agent-rack.config.json');
   if (!fs.existsSync(configPath)) {
     throw new Error('Falta agent-rack.config.json. Corre: npm run setup');
   }
@@ -132,16 +135,17 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Arranca el hub separado de este proceso si no hay uno vivo, y espera el token. */
+/** Arranca `silka hub` (agent-rack + despachador) si no hay uno vivo, y espera el token. */
 export async function ensureHub() {
   const current = hubStatus();
   if (current.alive && current.runtime?.token) return current;
-  const bin = path.join(current.root, 'node_modules', 'agent-rack', 'bin', 'agent-rack.js');
-  const child = spawn(process.execPath, [bin, 'start', '-t', 'sse', '-c', current.configPath], {
+  const cli = fileURLToPath(new URL('./cli.mjs', import.meta.url));
+  const child = spawn(process.execPath, [cli, 'hub'], {
     cwd: current.root,
     detached: true,
     stdio: 'ignore',
     windowsHide: true,
+    env: process.env,
   });
   child.unref();
   const deadline = Date.now() + 20_000;
@@ -161,9 +165,19 @@ export async function startHub() {
   }
   const bin = path.join(status.root, 'node_modules', 'agent-rack', 'bin', 'agent-rack.js');
   console.log(`Arrancando hub en http://127.0.0.1:${status.port}/sse`);
+  const stopDispatch = startQueueDispatcher({
+    port: status.port,
+    readRuntime: () => readRuntime(status.port),
+    connect: async (runtime) => {
+      const client = new DashboardRemoteClient(status.url, runtime.token);
+      await client.connect();
+      return client;
+    },
+  });
   const child = spawn(process.execPath, [bin, 'start', '-t', 'sse', '-c', status.configPath], {
     cwd: status.root,
     stdio: 'inherit',
+    env: process.env,
   });
   await new Promise((resolve, reject) => {
     child.once('error', reject);
@@ -180,6 +194,7 @@ export async function startHub() {
     process.once('SIGTERM', stop);
     if (process.platform === 'win32') process.once('SIGBREAK', stop);
   });
+  await stopDispatch();
 }
 
 export async function withClient(fn) {

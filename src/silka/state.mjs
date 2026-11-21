@@ -395,6 +395,30 @@ export function finishTurn({ workspace, id, status, summary }) {
   return finished;
 }
 
+/**
+ * Guarda en la tarea el sessionId de agent-rack y el id de conversación del
+ * agente (thread de Codex, chat de Cursor, sesión de OpenCode). El shim lo
+ * llama cuando ya pudo asociar el turno; ver associateTurn.
+ */
+export function rememberTurnLink({ workspace, id, sessionId, conversation }) {
+  if (!id) return null;
+  const dir = path.resolve(workspace);
+  return withLock(dir, () => {
+    const store = readStore(dir);
+    const task = store.tasks.find((item) => item.id === id);
+    if (!task) return null;
+    if (sessionId) task.sessionId = String(sessionId);
+    if (conversation?.id) {
+      task.conversation = {
+        kind: String(conversation.kind || ''),
+        id: String(conversation.id),
+      };
+    }
+    writeStore(dir, store);
+    return task;
+  });
+}
+
 export function appendDecision({ workspace, text, author, sessionId }) {
   const row = {
     at: new Date().toISOString(),
