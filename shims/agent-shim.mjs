@@ -34,6 +34,8 @@ import {
   holdForCurrentTool,
   interruptPath,
   opencodeToolPhase,
+  readInterrupt,
+  writeSessionTurnLink,
 } from '../src/silka/interrupt.mjs';
 import { readSilkaMark } from '../src/silka/mark.mjs';
 import { silkaConfigDir } from '../src/silka/paths.mjs';
@@ -684,7 +686,7 @@ function runCodex(argv) {
       if (step) process.stderr.write(`${step}\n`);
     }
   });
-  listenStop(child, gate);
+  listenStop(child, gate, turned.turnId);
   child.on('error', (e) => { process.stderr.write(`No pude iniciar codex: ${e.message}\n`); process.exit(127); });
   whenAgentExits(child, (code) => {
     if (userStop) {
@@ -780,19 +782,24 @@ function trackerFor(child) {
   return trackers.get(child);
 }
 
-function watchInterrupt(child, gate) {
+function watchInterrupt(child, gate, turnId) {
+  const id = String(turnId || '').trim();
+  if (!id) return;
   let stopped = false;
   const timer = setInterval(() => {
     if (stopped || userStop) return;
+    let order;
     try {
-      if (!fs.existsSync(interruptPath(process.pid))) return;
+      if (!fs.existsSync(interruptPath(id))) return;
+      order = readInterrupt(id);
+      if (!order || String(order.turnId) !== id) return;
     } catch {
       return;
     }
     stopped = true;
     clearInterval(timer);
     Promise.resolve(waitOutTool(gate)).finally(() => {
-      clearInterrupt(process.pid);
+      clearInterrupt(id);
       if (child.exitCode != null || child.signalCode != null) return;
       userStop = true;
       // Interrupción pedida por el usuario: forzado de una vez. En Windows taskkill sin /F
@@ -808,9 +815,9 @@ function watchInterrupt(child, gate) {
   });
 }
 
-function listenStop(child, gate) {
+function listenStop(child, gate, turnId) {
   trackerFor(child);
-  if (gate) watchInterrupt(child, gate);
+  if (gate) watchInterrupt(child, gate, turnId);
   const stop = () => {
     signalProcessTree(child.pid);
     const force = setTimeout(() => { signalProcessTree(child.pid, { force: true }); killTracked(trackerFor(child)); }, 2000);
@@ -874,7 +881,12 @@ function runTranslated(spec) {
     const lines = spec.kind === 'cursor' ? onCursorEvent(ev, state) : onOpencodeEvent(ev, state);
     publish(state, lines);
     for (const line of lines) noteActivity(line);
-    if (state.session_id) turnLog.conversation(spec.kind === 'cursor' ? 'chat' : 'session', state.session_id);
+    if (state.session_id) {
+      turnLog.conversation(spec.kind === 'cursor' ? 'chat' : 'session', state.session_id);
+      try {
+        writeSessionTurnLink({ sessionId: state.session_id, turnId: spec.turnId, workspace: process.cwd() });
+      } catch { /* el enlace no debe tumbar al shim */ }
+    }
     armPause();
   };
   child.stdout.on('data', (chunk) => {
@@ -890,7 +902,7 @@ function runTranslated(spec) {
   });
   // El stderr del CLI no se reenvía: el nuestro es solo la actividad corta.
   child.stderr.on('data', (chunk) => { err += chunk.toString('utf8'); });
-  listenStop(child, gate);
+  listenStop(child, gate, spec.turnId);
   child.on('error', (e) => fail(`No pude iniciar ${target}: ${e.message}`));
   whenAgentExits(child, (code) => {
     if (userStop) {

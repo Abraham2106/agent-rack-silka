@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { formatDuration, isBusy, originLabel, pad, promptPreview, shortId } from './format.mjs';
 import { readMeta, readPrompts, rememberSession } from './hub.mjs';
-import { clearInterrupt, shimPidForSession, writeInterrupt } from './interrupt.mjs';
+import { clearInterrupt, turnForSession, writeInterrupt } from './interrupt.mjs';
 import { appendNote } from './notes.mjs';
 import { originLabel as agentName, readOrigins } from './origin.mjs';
 import { clearQueue, enqueueMessage, listQueue, setQueuedNow } from './queue.mjs';
@@ -171,11 +171,11 @@ export function sendToSession(session, { text, author = 'tú', now = false, mess
   if (!messageId && agentName(author) === 'tú') rememberInsertion(session, item.text);
   let interrupted = false;
   if (immediate) {
-    const pid = shimPidForSession(session);
-    if (pid) {
-      clearInterrupt(pid);
+    const turnId = turnForSession(session);
+    if (turnId) {
+      clearInterrupt(turnId);
       writeInterrupt({
-        pid,
+        turnId,
         sessionId: session.sessionId,
         messageId: item.id,
         text: item.text,

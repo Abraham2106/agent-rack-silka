@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { graphifyMcpLaunch } from './graph.mjs';
 import { repoRoot } from './hub.mjs';
+import { writeAtomic } from './lock.mjs';
 
 const IS_WIN = process.platform === 'win32';
 export const HARNESSES = ['claude', 'codex', 'cursor', 'opencode'];
@@ -84,8 +85,7 @@ function readJson(file) {
 }
 
 function writeJson(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
+  writeAtomic(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 function cursorConfigPath() {

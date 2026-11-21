@@ -26,7 +26,7 @@ Punto de entrada a la documentación de diseño. Cada funcionalidad avanza por e
 | F3 | Bandeja de revisión | [F3](../specs/features/F3-bandeja-revision.md) | Spec escrita, pendiente de aprobación | — |
 | F4 | Cola de mezcla con re-verificación | [F4](../specs/features/F4-cola-mezcla.md) | Spec escrita, pendiente de aprobación | — |
 | F5 | Contexto por referencia y métricas | [F5](../specs/features/F5-contexto-metricas.md) | Spec escrita, pendiente de aprobación | — |
-| H1 | Corrección de carreras existentes (C-01…C-06 de concurrency.md) | [concurrency.md](concurrency.md) | Diagnosticada, pendiente de aprobación | — |
+| H1 | Corrección de carreras existentes (C-01…C-07 de concurrency.md) | [concurrency.md](concurrency.md) | Entregado | ver git log "feat(H1)" |
 
 ## Funcionalidades ya entregadas (antes de v1)
 

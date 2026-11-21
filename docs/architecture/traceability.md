@@ -69,19 +69,19 @@ Estados: `—` sin empezar · `Diseño` especificado · `Construcción` en curso
 ## 4. Concurrencia → corrección → prueba
 | Carrera | Corrección | Prueba | Estado |
 |---|---|---|---|
-| C-01 robo de lock rancio | Rename atómico más verificación del dueño | T-CC-01 | Diseño (H1) |
-| C-02 ventana sin archivo | Rename con reemplazo sin borrar | T-CC-02 | Diseño (H1) |
-| C-03 reutilización de PID | PID más hora de inicio | T-CC-03 | Diseño (H1) |
-| C-04 actualización perdida en cachés | Lock | T-CC-04 | Diseño (H1) |
-| C-05 interrupción por PID | Órdenes por id de turno | T-CC-05 | Diseño (H1) |
-| C-06 sesión elegida por heurística | Enlace explícito sesión ↔ turno | T-CC-06 | Diseño (H1) |
-| C-07 configs externas no atómicas | Escritura atómica | Revisión | Diseño (H1) |
+| C-01 robo de lock rancio | Lock rompedor `wx` + misma foto (dueño y mtime) | T-CC-01 | Entregado |
+| C-02 ventana sin archivo | Rename con reemplazo sin borrar + lectura con reintento | T-CC-02 | Entregado |
+| C-03 reutilización de PID | Lock renovado = vivo; PID + hora de inicio solo si caducó | T-CC-03 | Entregado |
+| C-04 actualización perdida en cachés | Lock | T-CC-04 | Entregado |
+| C-05 interrupción por PID | Órdenes por id de turno | T-CC-05 | Entregado |
+| C-06 sesión elegida por heurística | Enlace explícito sesión ↔ turno | T-CC-06 | Entregado |
+| C-07 configs externas no atómicas | Escritura atómica | Revisión | Entregado |
 | D-01…D-13 | Ver concurrency.md §3 | T-CC-07…09, T-MQ-*, T-RV-* | Diseño |
 
 ## 5. Orden de construcción y checkpoints
 | Paso | Pieza | Requisito de salida | Estado |
 |---|---|---|---|
-| 1 | H1: correcciones de concurrencia | T-CC-01…06 pasan | — |
+| 1 | H1: correcciones de concurrencia | T-CC-01…06 pasan | Entregado (0 fallos en 8 corridas de estrés) |
 | 2 | F1: Code Mode | T-CM-*, T-SEC-01…07 pasan; NFR-TOK-01 medido | — |
 | 3 | F2: tareas aisladas | T-TK-* pasan | — |
 | 4 | F3: bandeja | T-RV-* pasan | — |

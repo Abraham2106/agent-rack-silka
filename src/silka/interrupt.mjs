@@ -20,16 +20,82 @@ export function interruptDir() {
   return path.join(silkaConfigDir(), 'interrupt');
 }
 
-export function interruptPath(pid) {
-  const id = Number(pid);
-  if (!Number.isInteger(id) || id <= 0) throw new Error('Pid de shim inválido.');
-  return path.join(interruptDir(), String(id));
+function safeTurnId(turnId) {
+  return String(turnId || '').replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 120);
+}
+
+/** Las órdenes se indexan por id de turno (C-05), no por PID. */
+export function interruptPath(turnId) {
+  const id = String(turnId || '').trim();
+  if (!id) throw new Error('Id de turno inválido.');
+  return path.join(interruptDir(), `${safeTurnId(id)}.json`);
+}
+
+export function sessionTurnDir() {
+  return path.join(silkaConfigDir(), 'session-turn');
+}
+
+function safeSessionId(sessionId) {
+  return String(sessionId || '').replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 120);
+}
+
+export function sessionTurnPath(sessionId) {
+  const id = String(sessionId || '').trim();
+  if (!id) throw new Error('sessionId inválido.');
+  return path.join(sessionTurnDir(), `${safeSessionId(id)}.json`);
+}
+
+/** Enlace explícito sesión ↔ turno (C-06). */
+export function writeSessionTurnLink({ sessionId, turnId, workspace = '' } = {}) {
+  if (!sessionId || !turnId) return null;
+  fs.mkdirSync(sessionTurnDir(), { recursive: true });
+  const body = {
+    sessionId: String(sessionId),
+    turnId: String(turnId),
+    workspace: workspace ? String(workspace) : '',
+    at: new Date().toISOString(),
+  };
+  writeAtomic(sessionTurnPath(sessionId), `${JSON.stringify(body)}\n`);
+  return body;
+}
+
+export function readSessionTurnLink(sessionId) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(sessionTurnPath(sessionId), 'utf8'));
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearSessionTurnLink(sessionId) {
+  try { fs.rmSync(sessionTurnPath(sessionId), { force: true }); } catch { /* ya no está */ }
+}
+
+function tasksFor(session, tasks) {
+  if (Array.isArray(tasks)) return tasks;
+  if (session?.workspace) return readStore(session.workspace).tasks;
+  return [];
+}
+
+/** Turno activo de la sesión: enlace explícito o tarea con sessionId (sin heurística temporal). */
+export function turnForSession(session, tasks) {
+  if (!session?.sessionId) return '';
+  const link = readSessionTurnLink(session.sessionId);
+  if (link?.turnId) return String(link.turnId);
+  const list = tasksFor(session, tasks);
+  const running = list.filter((task) => task?.status === 'running' && task.sessionId === session.sessionId);
+  if (running.length === 1) return String(running[0].id);
+  return '';
 }
 
 export function writeInterrupt(order) {
-  const file = interruptPath(order?.pid);
+  const turnId = String(order?.turnId || order?.id || '').trim();
+  if (!turnId) throw new Error('Falta turnId en la orden de interrupción.');
+  const file = interruptPath(turnId);
   const body = {
-    pid: Number(order.pid),
+    turnId,
+    pid: Number(order.pid) || 0,
     sessionId: String(order.sessionId || ''),
     messageId: String(order.messageId || ''),
     text: String(order.text || ''),
@@ -40,42 +106,41 @@ export function writeInterrupt(order) {
   return body;
 }
 
-export function readInterrupt(pid) {
+export function readInterrupt(turnId) {
   try {
-    const parsed = JSON.parse(fs.readFileSync(interruptPath(pid), 'utf8'));
+    const parsed = JSON.parse(fs.readFileSync(interruptPath(turnId), 'utf8'));
     return parsed && typeof parsed === 'object' ? parsed : null;
   } catch {
     return null;
   }
 }
 
-export function clearInterrupt(pid) {
-  try { fs.rmSync(interruptPath(pid), { force: true }); } catch { /* ya no está */ }
+export function clearInterrupt(turnId) {
+  try { fs.rmSync(interruptPath(turnId), { force: true }); } catch { /* ya no está */ }
 }
 
-/** Pid del shim de la sesión, el que está en `.silka/tasks.json`. */
+/** Compatibilidad: pid del shim del turno enlazado a la sesión. */
 export function shimPidForSession(session, tasks) {
-  if (!session?.sessionId) return 0;
-  const list = Array.isArray(tasks)
-    ? tasks
-    : (session.workspace ? readStore(session.workspace).tasks : []);
-  const running = list.filter((task) => task?.status === 'running' && Number(task.pid) > 0);
-  const linked = running.find((task) => task.sessionId && task.sessionId === session.sessionId);
-  if (linked) return Number(linked.pid);
-  const same = running.filter((task) => {
-    const workspace = task.workspace || session.workspace;
-    return samePath(workspace, session.workspace)
-      && originLabel(task.agent) === originLabel(session.agentId);
-  });
-  if (!same.length) return 0;
-  if (same.length === 1) return Number(same[0].pid);
-  const target = Date.parse(session.createdAt);
-  same.sort((a, b) => {
-    const da = Math.abs(Date.parse(a.startedAt) - target);
-    const db = Math.abs(Date.parse(b.startedAt) - target);
-    return (Number.isFinite(da) ? da : 0) - (Number.isFinite(db) ? db : 0);
-  });
-  return Number(same[0].pid);
+  const turnId = turnForSession(session, tasks);
+  if (!turnId) return 0;
+  const task = tasksFor(session, tasks).find((item) => String(item?.id) === turnId);
+  const pid = Number(task?.pid);
+  return Number.isInteger(pid) && pid > 0 ? pid : 0;
+}
+
+/**
+ * Al crear una sesión en el hub, enlázala al turno en curso sin sessionId en
+ * el mismo workspace y agente (mínimo bridge C-06).
+ */
+export function linkSessionToStartingTurn(sessionId, { workspace, agentId, tasks } = {}) {
+  if (!sessionId || !workspace) return false;
+  const list = Array.isArray(tasks) ? tasks : readStore(workspace).tasks;
+  const agent = originLabel(agentId);
+  const open = list.filter((task) => task?.status === 'running' && !task.sessionId && samePath(task.workspace, workspace)
+    && originLabel(task.agent) === agent);
+  if (open.length !== 1) return false;
+  writeSessionTurnLink({ sessionId, turnId: open[0].id, workspace });
+  return true;
 }
 
 export function cursorToolPhase(ev) {

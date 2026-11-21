@@ -10,6 +10,7 @@ import { ensureHub, loadSilkaConfig } from './hub.mjs';
 import { stampPrompt } from './mark.mjs';
 import { unreadNotes } from './notes.mjs';
 import { matchSession, sendToSession } from './commands.mjs';
+import { linkSessionToStartingTurn } from './interrupt.mjs';
 import { originLabel, readOrigins, rememberOrigin } from './origin.mjs';
 import { appendDecision, formatBlock, formatChanges, formatDecisions, samePath } from './state.mjs';
 
@@ -234,12 +235,22 @@ function parseJson(text) {
   }
 }
 
-function rememberNewSessions(before, after, resultText, from, depth, parentSessionId) {
-  const ids = new Set(after);
+function rememberNewSessions(before, afterIds, resultText, from, depth, parentSessionId, sessions = []) {
+  const ids = new Set(afterIds);
   for (const id of sessionIdsIn(parseJson(resultText))) ids.add(id);
+  const byId = new Map(sessions.map((session) => [session.sessionId, session]));
   for (const id of ids) {
     if (before.has(id)) continue;
     rememberOrigin(id, { from, depth, parentSessionId });
+    const session = byId.get(id);
+    if (session) {
+      try {
+        linkSessionToStartingTurn(id, {
+          workspace: session.workspace,
+          agentId: session.agentId,
+        });
+      } catch { /* el enlace es opcional */ }
+    }
   }
 }
 
@@ -385,10 +396,11 @@ export async function startBridge() {
     if (isDelegatingTool(name) && listed && !result.isError) {
       const text = result.content?.map((item) => item.text || '').join('\n') ?? '';
       try {
-        const after = (await hubSessions(hub)).map((session) => session.sessionId);
-        rememberNewSessions(before, after, text, from, lineage.depth, lineage.parentSessionId);
+        const afterList = await hubSessions(hub);
+        const after = afterList.map((session) => session.sessionId);
+        rememberNewSessions(before, after, text, from, lineage.depth, lineage.parentSessionId, afterList);
       } catch {
-        rememberNewSessions(before, before, text, from, lineage.depth, lineage.parentSessionId);
+        rememberNewSessions(before, before, text, from, lineage.depth, lineage.parentSessionId, sessions);
       }
     }
     return result;

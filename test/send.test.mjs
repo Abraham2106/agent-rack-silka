@@ -61,16 +61,16 @@ function session(dir, extra = {}) {
 }
 
 test('la orden de interrupción, la entrega única y el alias steer', () => exclusive(async () => {
-  clearInterrupt(process.pid);
+  clearInterrupt('turn-1');
   const dir = workspace();
   const running = session(dir);
   sendToSession(running, { text: 'lo de la cola', author: 'tú', now: false });
   const sent = sendToSession(running, { text: 'hazlo ya', author: 'tú', now: true });
   assert.equal(sent.interrupted, true);
   assert.equal(sent.item.now, true);
-  const order = readInterrupt(process.pid);
+  const order = readInterrupt('turn-1');
   assert.equal(order.sessionId, sessionId);
-  assert.equal(order.pid, process.pid);
+  assert.equal(order.turnId, 'turn-1');
   assert.equal(order.text, 'hazlo ya');
 
   const notes = recentInsertions(dir);
@@ -119,13 +119,13 @@ test('la orden de interrupción, la entrega única y el alias steer', () => excl
     console.log = log;
   }
   assert.match(lines.join('\n'), /enviado ya/);
-  const again = readInterrupt(process.pid);
+  const again = readInterrupt('turn-1');
   assert.equal(again.text, 'desde steer');
-  clearInterrupt(process.pid);
+  clearInterrupt('turn-1');
 }));
 
 test('silka_send con y sin now, y un sub-agente no toca sesiones ajenas', () => exclusive(() => {
-  clearInterrupt(process.pid);
+  clearInterrupt('turn-1');
   const dir = workspace();
   const running = session(dir);
   const quiet = performSilkaSend({
@@ -151,7 +151,7 @@ test('silka_send con y sin now, y un sub-agente no toca sesiones ajenas', () => 
   assert.equal(now.interrupted, true);
   assert.equal(now.item.author, 'claude');
   assert.equal(now.item.now, true);
-  assert.equal(readInterrupt(process.pid).author, 'claude');
+  assert.equal(readInterrupt('turn-1').author, 'claude');
 
   const foreign = { ...running, sessionId: '44444444-4444-4444-4444-444444444444', agentId: 'codex' };
   assert.equal(canSilkaSend({
@@ -179,7 +179,7 @@ test('silka_send con y sin now, y un sub-agente no toca sesiones ajenas', () => 
     now: false,
   });
   assert.equal(own.item.author, 'opencode');
-  clearInterrupt(process.pid);
+  clearInterrupt('turn-1');
 }));
 
 test('el shim espera a que termine la herramienta y respeta el tope', async () => {

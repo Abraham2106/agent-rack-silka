@@ -8,7 +8,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { writeAtomic } from './lock.mjs';
+import { withFileLock, writeAtomic } from './lock.mjs';
 import { silkaConfigDir } from './paths.mjs';
 
 export const MODELS_TTL_MS = 6 * 60 * 60 * 1000;
@@ -17,6 +17,7 @@ const IS_WIN = process.platform === 'win32';
 const cacheFile = () => path.join(silkaConfigDir(), 'models.json');
 const unavailableFile = () => path.join(silkaConfigDir(), 'models-unavailable.json');
 const recentFile = () => path.join(silkaConfigDir(), 'recent-models.json');
+const modelsLock = (name) => path.join(silkaConfigDir(), `${name}.lock`);
 
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
@@ -135,7 +136,11 @@ export async function loadModels(agent, { refresh = false, all = false } = {}) {
   // Si el CLI falla pero había una lista vieja, se queda la vieja.
   const keep = models.length ? models : (cache[agent]?.models || []);
   const next = { ...readCatalogCache(), [agent]: { at: new Date().toISOString(), models: keep, error } };
-  try { writeAtomic(cacheFile(), `${JSON.stringify(next)}\n`); } catch { /* la caché es opcional */ }
+  try {
+    withFileLock(modelsLock('models-cache'), () => {
+      writeAtomic(cacheFile(), `${JSON.stringify(next)}\n`);
+    });
+  } catch { /* la caché es opcional */ }
   return decorate(agent, keep, error, { all });
 }
 
@@ -159,7 +164,9 @@ export function setModelFilter(agent, patterns) {
   const all = modelFilters();
   if (patterns?.length) all[agent] = patterns;
   else delete all[agent];
-  writeAtomic(filtersFile(), `${JSON.stringify(all, null, 2)}\n`);
+  withFileLock(modelsLock('model-filters'), () => {
+    writeAtomic(filtersFile(), `${JSON.stringify(all, null, 2)}\n`);
+  });
   return all[agent] || [];
 }
 
@@ -190,9 +197,15 @@ const UNSUPPORTED = /not supported|unsupported|model_not_found|no existe|not fou
 /** Si un error dice que el modelo no sirve para esta cuenta, lo recordamos. */
 export function noteModelError(agent, model, errorText) {
   if (!agent || !model || !UNSUPPORTED.test(String(errorText || ''))) return false;
-  const all = unavailableModels();
-  all[agent] = { ...(all[agent] || {}), [model]: new Date().toISOString() };
-  try { writeAtomic(unavailableFile(), `${JSON.stringify(all, null, 2)}\n`); } catch { return false; }
+  try {
+    withFileLock(modelsLock('models-unavailable'), () => {
+      const fresh = readJson(unavailableFile(), {}) || {};
+      fresh[agent] = { ...(fresh[agent] || {}), [model]: new Date().toISOString() };
+      writeAtomic(unavailableFile(), `${JSON.stringify(fresh, null, 2)}\n`);
+    });
+  } catch {
+    return false;
+  }
   return true;
 }
 
@@ -203,9 +216,13 @@ export function recentModels(agent) {
 
 export function rememberRecentModel(agent, model) {
   if (!agent || !model) return;
-  const all = readJson(recentFile(), {}) || {};
-  all[agent] = [model, ...(all[agent] || []).filter((m) => m !== model)].slice(0, 5);
-  try { writeAtomic(recentFile(), `${JSON.stringify(all, null, 2)}\n`); } catch { /* opcional */ }
+  try {
+    withFileLock(modelsLock('recent-models'), () => {
+      const fresh = readJson(recentFile(), {}) || {};
+      fresh[agent] = [model, ...(fresh[agent] || []).filter((m) => m !== model)].slice(0, 5);
+      writeAtomic(recentFile(), `${JSON.stringify(fresh, null, 2)}\n`);
+    });
+  } catch { /* opcional */ }
 }
 
 // ---- búsqueda ----------------------------------------------------------------
