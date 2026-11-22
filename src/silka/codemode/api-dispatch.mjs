@@ -100,6 +100,16 @@ export function createApiDispatcher(ctx) {
       return mgr.card(validated[0]);
     }
 
+    if (method.startsWith('workspace.')) {
+      const mgr = createTaskManager(ctx.workspace);
+      const [taskId, name] = validated;
+      if (method === 'workspace.run') return mgr.startTaskRun(taskId, name);
+      if (method === 'workspace.stop') return mgr.stopTaskRun(taskId, name ?? null);
+      if (method === 'workspace.runs') return mgr.listTaskRuns(taskId);
+      if (method === 'workspace.archive') return mgr.archiveTaskWorkspace(taskId);
+      throw silkaError('E_NOT_FOUND', `Método no existe: ${method}`);
+    }
+
     if (method === 'launch') {
       const [planOrTask, opts = {}] = validated;
       const tasks = normalizeTasks(planOrTask);

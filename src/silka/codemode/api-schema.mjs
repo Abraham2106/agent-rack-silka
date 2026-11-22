@@ -103,6 +103,13 @@ export function validateApiArgs(path, args) {
       return [assertString(list[0], 'id')];
     case 'plan.status':
       return [assertString(list[0], 'planId')];
+    case 'workspace.runs':
+    case 'workspace.archive':
+      return [assertString(list[0], 'taskId')];
+    case 'workspace.run':
+      return [assertString(list[0], 'taskId'), assertString(list[1], 'name')];
+    case 'workspace.stop':
+      return [assertString(list[0], 'taskId'), assertOptionalString(list[1], 'name')];
     default:
       return list;
   }

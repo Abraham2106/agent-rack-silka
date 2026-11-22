@@ -137,6 +137,42 @@ En `ui`, el encabezado muestra el puerto del hub (vivo o caído) y cuántas sesi
 
 En `ui`, `e` abre la vista Estado del workspace de la sesión elegida: rama, HEAD, tareas, archivos, conflictos y decisiones. Si dos tareas en curso tocan el mismo archivo, la fila lleva `!` y queda una nota para el manager.
 
+## Receta del workspace (`silka.json`)
+
+Un `silka.json` en la raíz del repo (versionado) dice cómo se prepara, se levanta y se cierra el worktree
+de cada tarea. Sin el archivo, Silka se comporta como antes.
+
+```json
+{
+  "setup": { "win": "npm ci", "posix": "npm ci" },
+  "run": { "dev": "npm run dev -- --port ${SILKA_PORT}" },
+  "archive": "node scripts/limpiar-tarea.mjs",
+  "copy": ["config/dev.local.json"],
+  "ports": 10,
+  "runMode": "concurrent",
+  "shell": "pwsh"
+}
+```
+
+- `ports`: tamaño del rango contiguo de puertos de cada tarea (por defecto 10). `SILKA_PORT` es el primero.
+- `copy` y `.worktreeinclude`: archivos que git no versiona y que se copian al worktree. La lista de
+  denegación de secretos (por defecto `.env*`, salvo `.env.example`) siempre gana: un `.env.local` no se
+  copia aunque aparezca en `copy`.
+- Variables `SILKA_PORT`, `SILKA_WORKSPACE_PATH`, `SILKA_ROOT_PATH`, `SILKA_WORKSPACE_NAME`, `SILKA_TASK_ID`
+  y `SILKA_DEFAULT_BRANCH` llegan a setup, run, verify, archive y al agente.
+- `runMode: "exclusive"`: como máximo un `run` vivo por repo.
+- `shell`: `pwsh`, `cmd` o `bash` (Git Bash). `${NAME}` se sustituye antes de lanzar el shell.
+
+```
+silka workspace run <tarea> dev      # lanza el run "dev" en el worktree
+silka workspace ls <tarea>           # runs de la tarea y si siguen vivos
+silka workspace stop <tarea> [dev]   # detiene el árbol de procesos
+silka workspace archive <tarea>      # detiene, corre archive, quita el worktree
+```
+
+En Code Mode: `silka.workspace.run(taskId, name)`, `.stop(taskId, name?)`, `.runs(taskId)` y
+`.archive(taskId)`. Una tarea solo puede usarlos sobre sí misma (SEC-16).
+
 ## Estado compartido
 
 Cada turno que pasa por el shim anota en `<workspace>/.silka/` qué agente trabajó, desde qué commit y qué archivos tocó. `tasks.json` guarda la sesión, el origen, la rama, el commit base, el inicio, el fin, el estado y un resumen de una línea. Los archivos salen de comparar `git status --porcelain` y el hash de cada uno al empezar y al terminar. Si otro agente estaba en el mismo árbol, el archivo queda marcado como ambiguo. `decisions.jsonl` guarda decisiones con autor, fecha, sesión y texto.

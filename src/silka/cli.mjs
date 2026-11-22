@@ -27,6 +27,7 @@ function printHelp() {
   silka plan status <planId> [workspace]
   silka task ls [workspace]
   silka task verify <id> [workspace]
+  silka workspace run|stop|ls|archive <tarea> [nombre] [--workspace dir]   (receta silka.json)
   silka review ls [workspace]
   silka review approve <id> --version N [workspace]
   silka review reject <id> "<nota>" --version N [workspace]
@@ -181,6 +182,21 @@ ${agent}  (${cat.models.length}${cat.total > cat.models.length ? ` de ${cat.tota
       return;
     }
     throw new Error('Uso: silka task run|ls|verify ...');
+  }
+  if (cmd === 'workspace') {
+    const sub = argv[1];
+    const { taskWorkspaceCommand } = await import('./tasks/cli.mjs');
+    const { parseArgs } = await import('./commands.mjs');
+    const { flags, positional } = parseArgs(argv.slice(2));
+    const workspace = flags.workspace || process.cwd();
+    if (!['run', 'stop', 'ls', 'archive'].includes(sub)) {
+      throw new Error('Uso: silka workspace run|stop|ls|archive <tarea> [nombre] [--workspace dir]');
+    }
+    const [taskId, name] = positional;
+    if (!taskId) throw new Error(`Uso: silka workspace ${sub} <tarea>${sub === 'run' ? ' <nombre>' : ' [nombre]'} [--workspace dir]`);
+    if (sub === 'run' && !name) throw new Error('Uso: silka workspace run <tarea> <nombre> [--workspace dir]');
+    taskWorkspaceCommand(sub, taskId, name, workspace);
+    return;
   }
   if (cmd === 'review') {
     const sub = argv[1];

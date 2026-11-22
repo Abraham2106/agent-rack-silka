@@ -56,7 +56,14 @@ export function removeLinkedNodeModules(worktreePath) {
 export function prepareWorktreeRemoval(repoRoot, worktreePath) {
   const wt = path.resolve(worktreePath);
   const mainNm = path.join(path.resolve(repoRoot), 'node_modules');
+  const hadMain = fs.existsSync(mainNm);
+  const mainEntriesBefore = hadMain ? safeReaddir(mainNm).length : 0;
   const unlink = removeLinkedNodeModules(wt);
-  const mainOk = !fs.existsSync(mainNm) || fs.existsSync(mainNm);
+  // Comprobación real: el node_modules del repo sigue existiendo y con sus entradas (el enlace se quitó sin seguirlo).
+  const mainOk = !hadMain || (fs.existsSync(mainNm) && safeReaddir(mainNm).length === mainEntriesBefore);
   return { ...unlink, mainNodeModulesIntact: mainOk };
+}
+
+function safeReaddir(dir) {
+  try { return fs.readdirSync(dir); } catch { return []; }
 }

@@ -219,6 +219,23 @@ export interface SilkaMerge {
   status(id: string): Promise<unknown>;
 }
 
+export interface SilkaWorkspace {
+  /**
+   * Lanza un `run` de la receta (silka.json) en el worktree de la tarea. Con `runMode: exclusive`
+   * se rechaza si ya corre otro `run` del repo.
+   */
+  run(taskId: string, name: string): Promise<{ name: string; pid: number; command: string; startedAt: string }>;
+  /** Detiene uno o todos los `run` de la tarea, con su árbol de procesos. */
+  stop(taskId: string, name?: string): Promise<unknown>;
+  /** Estado de los `run` de la tarea (vivos o no). */
+  runs(taskId: string): Promise<unknown[]>;
+  /**
+   * Cierra la tarea: detiene sus `run`, corre el `archive` de la receta y quita el worktree.
+   * Solo la propia tarea puede usarlo (SEC-16).
+   */
+  archive(taskId: string): Promise<unknown>;
+}
+
 export interface Silka {
   plan: SilkaPlan;
   state: SilkaState;
@@ -226,6 +243,7 @@ export interface Silka {
   agents: SilkaAgents;
   review: SilkaReview;
   merge: SilkaMerge;
+  workspace: SilkaWorkspace;
 
   /**
    * Lanza una o varias tareas en el hub (sesiones en segundo plano).

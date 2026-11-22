@@ -31,6 +31,19 @@ export function taskVerify(taskId, workspace = process.cwd()) {
   return card;
 }
 
+/** `silka workspace run|stop|ls|archive <tarea> [nombre]` (FR-TK-15). */
+export function taskWorkspaceCommand(action, taskId, name, workspace = process.cwd()) {
+  const mgr = createTaskManager(workspace);
+  let out;
+  if (action === 'run') out = mgr.startTaskRun(taskId, name);
+  else if (action === 'stop') out = mgr.stopTaskRun(taskId, name || null);
+  else if (action === 'ls') out = mgr.listTaskRuns(taskId);
+  else if (action === 'archive') out = mgr.archiveTaskWorkspace(taskId);
+  else throw new Error(`acción de workspace desconocida: ${action}`);
+  console.log(JSON.stringify(out, null, 2));
+  return out;
+}
+
 export function taskList(workspace = process.cwd()) {
   const mgr = createTaskManager(workspace);
   const tasks = mgr.list();

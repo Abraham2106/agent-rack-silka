@@ -59,7 +59,7 @@ export function auditBlocked({ taskId = '', action, rule, message, now = new Dat
 export function taskScopeViolation(method, args, ownTaskId) {
   if (!ownTaskId) return null;
   const pick = (value) => String(value ?? '');
-  if (method === 'card' || method.startsWith('review.')) {
+  if (method === 'card' || method.startsWith('review.') || method.startsWith('workspace.')) {
     const target = pick(args?.[0]);
     if (target && target !== ownTaskId) return `la tarea ${ownTaskId} no puede usar ${method} sobre ${target}`;
     return null;
