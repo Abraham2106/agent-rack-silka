@@ -179,6 +179,17 @@ npm run silka -- connect claude --with-graph
 - `agent-rack.config.json` lo genera el setup con rutas absolutas locales (está en `.gitignore`). Hay un ejemplo en [`agent-rack.config.example.json`](agent-rack.config.example.json).
 - `.npmrc` trae `ignore-scripts=true` porque el postinstall de agent-rack es solo para Unix. `node-pty` ya incluye binarios precompilados.
 
+## Diagnóstico: `silka doctor`
+
+`silka doctor` revisa el entorno (Node, agent-rack y su config, carpeta de worktrees permitida, hubs y bridges
+vivos, CLIs de los agentes, worktrees huérfanos, registro de repos, tamaño de notas y logs). Por cada punto dice
+si está bien, qué falla y cómo arreglarlo. Solo lee: no arregla nada por su cuenta.
+
+```bash
+npm run -s silka -- doctor          # texto para la terminal
+npm run -s silka -- doctor --json   # JSON para el manager; sale con código 1 si hay alguna falla
+```
+
 ## Problemas comunes
 
 | Síntoma | Solución |
