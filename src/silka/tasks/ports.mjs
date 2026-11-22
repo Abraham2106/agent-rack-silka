@@ -28,19 +28,25 @@ const MAX_PROBE_ROUNDS = 40;
 /**
  * ¿Están libres todos estos puertos en 127.0.0.1 y en todas las interfaces? Se comprueba en un
  * proceso node aparte (síncrono, como el resto de la asignación). Un puerto ocupado por un servidor
- * ajeno hace fallar la comprobación.
+ * ajeno hace fallar la comprobación. Hay que probar las dos: en Windows, escuchar en todas las
+ * interfaces no detecta un servidor que ya escucha solo en 127.0.0.1 (y al revés).
  */
 export function portsAreFree(ports) {
   if (!ports.length) return true;
   const code = `
     const net = require('net');
     const ports = process.argv.slice(1).map(Number);
+    const hosts = [undefined, '127.0.0.1'];
+    const jobs = [];
+    for (const p of ports) for (const h of hosts) jobs.push([p, h]);
     let i = 0;
     const next = () => {
-      if (i >= ports.length) process.exit(0);
+      if (i >= jobs.length) process.exit(0);
+      const [port, host] = jobs[i];
       const s = net.createServer();
       s.once('error', () => process.exit(1));
-      s.listen({ port: ports[i], exclusive: true }, () => s.close(() => { i += 1; next(); }));
+      const opts = host ? { port, host, exclusive: true } : { port, exclusive: true };
+      s.listen(opts, () => s.close(() => { i += 1; next(); }));
     };
     next();`;
   const r = spawnSync(process.execPath, ['-e', code, ...ports.map(String)], { timeout: 15_000, windowsHide: true });
