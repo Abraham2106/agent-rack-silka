@@ -17,7 +17,7 @@ export function scanWorkspaces({ dirs, sessions, selectedWorkspace }) {
         const report = workspaceReport(dir);
         if (selectedWorkspace && samePath(selectedWorkspace, dir)) board = report;
         for (const conflict of report.conflicts) {
-          if (Date.parse(conflict.at) < fresh) continue;
+          if (conflict.resolved || Date.parse(conflict.at) < fresh) continue;
           for (const taskId of conflict.taskIds || []) {
             const task = report.tasks.find((item) => item.id === taskId);
             const session = task ? matchTaskSession({ ...task, workspace: dir }, sessions) : null;

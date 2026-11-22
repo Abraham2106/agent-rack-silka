@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { graphHint } from './graph.mjs';
 import { withFileLock, writeAtomic } from './lock.mjs';
-import { appendNote, recentInsertions } from './notes.mjs';
+import { recentInsertions } from './notes.mjs';
 import { originLabel } from './origin.mjs';
 
 const TWO_HOURS = 2 * 60 * 60 * 1000;
@@ -303,11 +303,6 @@ function conflictKey(file, taskIds) {
   return `${file}|${[...taskIds].sort().join(',')}`;
 }
 
-function conflictText(file, tasks) {
-  const names = tasks.map((task) => `${task.agent} ${String(task.id).slice(0, 8)}`).join(' y ');
-  return `Conflicto: ${names || 'dos tareas'} tocan ${file} a la vez.`;
-}
-
 export function matchTaskSession(task, sessions) {
   const pool = (sessions || []).filter((session) => samePath(session.workspace, task.workspace || ''));
   const sameAgent = pool.filter((session) => originLabel(session.agentId) === originLabel(task.agent));
@@ -321,34 +316,29 @@ export function matchTaskSession(task, sessions) {
   })[0];
 }
 
-function rememberConflicts(workspace, store, found, sessions) {
+/**
+ * Un conflicto es estado de la tarea (FR-SN-04): una fila por par de tareas y
+ * archivo, sin notas. Si ya estaba resuelto y vuelve a darse, se reabre.
+ */
+function rememberConflicts(store, found) {
   let wrote = false;
   for (const item of found) {
     const key = conflictKey(item.file, item.taskIds);
-    let row = store.conflicts.find((conflict) => conflict.key === key);
+    const row = store.conflicts.find((conflict) => conflict.key === key);
     if (!row) {
-      row = { key, file: item.file, taskIds: item.taskIds, at: new Date().toISOString(), noted: false };
-      store.conflicts.push(row);
+      store.conflicts.push({ key, file: item.file, taskIds: item.taskIds, at: new Date().toISOString(), resolved: false });
+      wrote = true;
+    } else if (row.resolved) {
+      row.resolved = false;
+      delete row.resolvedAt;
+      row.at = new Date().toISOString();
       wrote = true;
     }
-    const tasks = item.taskIds.map((id) => store.tasks.find((task) => task.id === id)).filter(Boolean)
-      .map((task) => ({ ...task, workspace: task.workspace || workspace }));
-    const sessionIds = [...new Set(tasks.map((task) => matchTaskSession(task, sessions)?.sessionId).filter(Boolean))];
-    row.sessions = Array.isArray(row.sessions) ? row.sessions : [];
-    const targets = sessionIds.length ? sessionIds : (row.sessions.length ? [] : ['manager']);
-    const text = conflictText(item.file, tasks);
-    for (const sessionId of targets) {
-      if (row.sessions.includes(sessionId)) continue;
-      appendNote({ sessionId, text });
-      row.sessions.push(sessionId);
-      wrote = true;
-    }
-    row.noted = row.sessions.length > 0;
   }
   return wrote;
 }
 
-export function refreshConflicts(workspace, sessions = []) {
+export function refreshConflicts(workspace) {
   const dir = path.resolve(workspace);
   return withLock(dir, () => {
     const store = readStore(dir);
@@ -363,11 +353,16 @@ export function refreshConflicts(workspace, sessions = []) {
         found.push({ file, taskIds: [task.id, ...peers.map((peer) => peer.id)] });
       }
     }
-    if (rememberConflicts(dir, store, found, sessions.map((session) => ({ ...session, workspace: session.workspace || dir })))) {
-      writeStore(dir, store);
-    } else if (live.length && store.conflicts.length) {
-      writeStore(dir, store);
+    let wrote = rememberConflicts(store, found);
+    const seen = new Set(found.map((item) => conflictKey(item.file, item.taskIds)));
+    const now = new Date().toISOString();
+    for (const row of store.conflicts) {
+      if (row.resolved || seen.has(row.key)) continue;
+      row.resolved = true;
+      row.resolvedAt = now;
+      wrote = true;
     }
+    if (wrote) writeStore(dir, store);
     return store.conflicts;
   });
 }
@@ -415,7 +410,7 @@ export function finishTurn({ workspace, id, status, summary }) {
         && ((other.files || []).includes(file) || (other.ambiguous || []).includes(file) || other.status === 'running'));
       if (peersHit.length) found.push({ file, taskIds: [task.id, ...peersHit.map((peer) => peer.id)] });
     }
-    rememberConflicts(dir, store, found, []);
+    rememberConflicts(store, found);
     writeStore(dir, store);
     finished = task;
   });
