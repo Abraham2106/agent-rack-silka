@@ -16,6 +16,7 @@ import {
 import { buildDeliveryCard } from './card.mjs';
 import { writeTaskLog, readTaskLogRef } from './log-store.mjs';
 import { validateTaskList, normalizeTaskInput } from './model.mjs';
+import { loadRouting, resolveRouting } from '../routing.mjs';
 import { runAcceptCriteria } from './accept.mjs';
 import { buildRepairMessage } from './repair.mjs';
 import { allocatePorts, releasePorts, portsEnv } from './ports.mjs';
@@ -345,11 +346,14 @@ export class TaskManager {
       // agent-memory: solo entradas vigentes del alcance de esta tarea, antes del encargo.
       const prompt = memoryPrefix(this.repoRoot, task.scope) + agentPrompt(task);
       if (!prompt.trim()) throw silkaError('E_POLICY', `La tarea ${task.id} no tiene prompt.`);
+      // model-routing: explícito de la tarea, luego la tabla .silka/routing.json, luego el defecto.
+      // Una tabla inválida falla esta tarea (queda en startError) sin lanzarla con esa tabla.
+      const routing = resolveRouting(task, { routing: loadRouting(this.repoRoot), defaultAgent, defaultModel });
       const payload = {
-        agent: task.agent || defaultAgent,
+        agent: routing.agent,
         prompt,
         workspace: task.worktreePath,
-        model: task.model || defaultModel || undefined,
+        model: routing.model || undefined,
       };
       // eslint-disable-next-line no-await-in-loop
       const created = parseHubJson(await callHub('agent_session_create', payload));
@@ -364,6 +368,8 @@ export class TaskManager {
           return store;
         }
         row.sessionId = sessionId;
+        // Qué rol, agente y modelo corrieron y por qué regla (ficha, FR-MR-03).
+        row.routing = routing;
         row.awaitingHubSession = false;
         row.sessionAlive = true;
         delete row.startError;
@@ -383,7 +389,8 @@ export class TaskManager {
       noteSessionCapacity(log);
       } catch (err) {
         // Una tarea que no arranca no bloquea a las demás; el motivo queda en la tarea.
-        const msg = err instanceof Error ? err.message : String(err);
+        // silkaError devuelve un objeto plano ({ code, message }), no un Error: sin esto el log decía [object Object].
+        const msg = err instanceof Error ? err.message : String(err?.message ?? err);
         const limit = isSessionLimitError(msg);
         if (limit) noteSessionLimit(log, msg);
         const stored = msg.slice(0, 500);
