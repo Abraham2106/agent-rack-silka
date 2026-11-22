@@ -141,12 +141,47 @@ test('SEC-16: silka_state de una tarea no lista las tareas en curso de otras', a
   }
 });
 
-test('AC-01 (1.1): un sub-agente de Codex arranca sin el servidor agent-rack; el manager no cambia', async () => {
+test('AC-01 (1.1): el sub-agente de Codex arranca sin agent-rack al llegar al tope; con tope mayor lo conserva', async () => {
   const { codexSubagentArgs } = await import('../shims/agent-shim.mjs');
-  assert.deepEqual(codexSubagentArgs({ SILKA_DEPTH: '1' }), ['-c', 'mcp_servers.agent-rack.enabled=false']);
-  assert.deepEqual(codexSubagentArgs({ SILKA_DEPTH: '2' }), ['-c', 'mcp_servers.agent-rack.enabled=false']);
-  assert.deepEqual(codexSubagentArgs({}), []);
-  assert.deepEqual(codexSubagentArgs({ SILKA_DEPTH: '0' }), []);
+  const off = ['-c', 'mcp_servers.agent-rack.enabled=false'];
+  // Todo agente lanzado por el shim es de nivel >= 1; con el tope por defecto (1) ya no delega.
+  assert.deepEqual(codexSubagentArgs({}), off);
+  assert.deepEqual(codexSubagentArgs({ SILKA_DEPTH: '1' }), off);
+  assert.deepEqual(codexSubagentArgs({}, 1), off);
+  // AC-02: con tope 2 el agente de nivel 1 conserva el servidor (su bridge oculta lo que delega a nivel 2).
+  assert.deepEqual(codexSubagentArgs({ SILKA_MAX_DEPTH: '2' }, 1), []);
+  assert.deepEqual(codexSubagentArgs({ SILKA_MAX_DEPTH: '2' }, 2), off);
+});
+
+test('AC-01 (1.1): OpenCode corre con servidor privado para que su bridge herede SILKA_DEPTH', async () => {
+  const { opencodeSubagentArgs } = await import('../shims/agent-shim.mjs');
+  assert.deepEqual(opencodeSubagentArgs(true), ['--standalone']);
+  assert.deepEqual(opencodeSubagentArgs(false), []);
+});
+
+test('AC-01/AC-02 (1.2): el tope por defecto es 1 y SILKA_MAX_DEPTH lo sube', async () => {
+  const { maxDepth } = await import('../src/silka/bridge.mjs');
+  const prev = process.env.SILKA_MAX_DEPTH;
+  try {
+    delete process.env.SILKA_MAX_DEPTH;
+    assert.equal(maxDepth(), 1);
+    process.env.SILKA_MAX_DEPTH = '2';
+    assert.equal(maxDepth(), 2);
+  } finally {
+    if (prev === undefined) delete process.env.SILKA_MAX_DEPTH; else process.env.SILKA_MAX_DEPTH = prev;
+  }
+});
+
+test('AC-01 (1.2): el linaje pone a un agente de tarea en profundidad 1 aunque su entorno no la traiga', async () => {
+  const { resolveLineage } = await import('../src/silka/bridge.mjs');
+  const sessions = [{ sessionId: 's-tarea', agentId: 'opencode', status: 'running', workspace: 'C:/wt/t1', createdAt: new Date().toISOString() }];
+  const origins = { 's-tarea': { from: 'claude', depth: 0 } };
+  // OpenCode en modo servicio no hereda SILKA_DEPTH (envDepth 0): el hub registra a su padre y sube la cuenta.
+  const lineage = resolveLineage({ envDepth: 0, from: 'opencode', workspace: 'C:/wt/t1', sessions, origins });
+  assert.equal(lineage.depth, 1);
+  assert.equal(lineage.parentSessionId, 's-tarea');
+  // Desde el manager (sin sesión padre) la profundidad es 0 y puede delegar.
+  assert.equal(resolveLineage({ envDepth: 0, from: 'claude', workspace: 'C:/wt/t1', sessions, origins }).depth, 0);
 });
 
 test('SEC-17: la lista de la config de Silka se lee con SILKA_CONFIG y cae a la de por defecto', async () => {

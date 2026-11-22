@@ -148,8 +148,8 @@ export function currentDepth() {
 }
 
 export function maxDepth() {
-  const value = Number(process.env.SILKA_MAX_DEPTH ?? 2);
-  return Number.isFinite(value) ? Math.floor(value) : 2;
+  const value = Number(process.env.SILKA_MAX_DEPTH ?? 1);
+  return Number.isFinite(value) ? Math.floor(value) : 1;
 }
 
 export function isDelegatingTool(name) {
@@ -365,11 +365,10 @@ export async function startBridge() {
     let listed = false;
     if (!visibleToolNames([name], { depth: currentDepth(), manager }).includes(name)) {
       // El mensaje dice la razón real: herramienta solo del manager o tope de profundidad.
-      const text = name === 'silka_notes' && !manager
-        ? 'silka_notes es solo para el manager (claude o tú), no para sub-agentes.'
-        : depthBlockMessage();
-      if (name !== 'silka_notes' || manager) auditBlocked({ taskId: callerTaskId(), action: name, rule: 'SEC-15', message: text });
-      return { content: [{ type: 'text', text }], isError: true };
+      if (name === 'silka_notes' && !manager) {
+        return textResult('silka_notes es solo para el manager (claude o tú), no para sub-agentes.', true);
+      }
+      return depthBlocked(name, currentDepth(), { code: true });
     }
     if (name === 'silka_notes') {
       if (!manager) return { content: [{ type: 'text', text: 'silka_notes es solo para el manager.' }], isError: true };

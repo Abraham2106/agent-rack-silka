@@ -15,7 +15,7 @@ Entrega:
 2. Guarda contra recursión.
    - El shim fija `SILKA_DEPTH` (+1) y `SILKA_AGENT=<agente>` en el entorno de cada sub-agente.
    - El hub no conserva el entorno del que llama. Por eso el bridge antepone al prompt una marca `[silka depth=N from=X]`, y el shim la lee, la quita del prompt y la usa.
-   - Con `SILKA_DEPTH >= SILKA_MAX_DEPTH` (por defecto 2), el bridge oculta o rechaza las herramientas que delegan, con un mensaje claro.
+   - Con `SILKA_DEPTH >= SILKA_MAX_DEPTH` (por defecto 1, SEC-15), el bridge oculta o rechaza las herramientas que delegan, con un mensaje claro.
 3. `silka connect <claude|codex|cursor|opencode|all>` y `silka disconnect <...>`.
    - Registran `silka bridge` como servidor MCP llamado `agent-rack` en cada CLI, con su comando oficial. Usa ruta absoluta a node y a `src/silka/cli.mjs`.
    - Si no hay comando oficial, edita su JSON de config con un respaldo `.bak`.
