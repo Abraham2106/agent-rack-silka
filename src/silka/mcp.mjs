@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { unreadNotes } from './notes.mjs';
+import { managerNotes, notesSummary } from './notes.mjs';
 
 export async function startMcp() {
   const server = new McpServer({ name: 'silka', version: '0.1.0' });
@@ -15,8 +15,10 @@ export async function startMcp() {
       markRead: z.boolean().optional().describe('Marca como leídas las notas devueltas. Por defecto true.'),
     },
   }, async ({ sessionId, markRead }) => {
-    const notes = unreadNotes({ sessionId, markRead: markRead !== false });
-    return { content: [{ type: 'text', text: JSON.stringify(notes) }] };
+    const body = sessionId
+      ? managerNotes({ sessionId, markRead: markRead !== false })
+      : notesSummary();
+    return { content: [{ type: 'text', text: JSON.stringify(body) }] };
   });
   const transport = new StdioServerTransport();
   await server.connect(transport);

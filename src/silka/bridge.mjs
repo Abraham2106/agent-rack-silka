@@ -9,7 +9,7 @@ import { isBusy } from './format.mjs';
 import { ensureHub, loadSilkaConfig } from './hub.mjs';
 import { createHubLink } from './hub-link.mjs';
 import { stampPrompt } from './mark.mjs';
-import { unreadNotes } from './notes.mjs';
+import { managerNotes, notesSummary } from './notes.mjs';
 import { matchSession, sendToSession } from './commands.mjs';
 import { linkSessionToStartingTurn } from './interrupt.mjs';
 import { originLabel, readOrigins, rememberOrigin } from './origin.mjs';
@@ -361,8 +361,10 @@ export async function startBridge() {
     if (name === 'silka_notes') {
       if (!manager) return { content: [{ type: 'text', text: 'silka_notes es solo para el manager.' }], isError: true };
       const markRead = args.markRead !== false;
-      const notes = unreadNotes({ sessionId: args.sessionId, markRead });
-      return { content: [{ type: 'text', text: JSON.stringify(notes) }] };
+      const body = args.sessionId
+        ? managerNotes({ sessionId: args.sessionId, markRead })
+        : notesSummary();
+      return { content: [{ type: 'text', text: JSON.stringify(body) }] };
     }
     if (name === 'silka_search') {
       const result = searchSignatures(String(args.query || ''));
