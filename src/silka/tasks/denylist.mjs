@@ -84,6 +84,15 @@ function matchesOne(pattern, file, { homeDir }) {
   return globToRegExp(pattern).test(base);
 }
 
+/**
+ * ¿Casa `file` con un patrón con la misma sintaxis que la lista de denegación (sin `!`)? Lo usan las
+ * recetas de workspace (`copy`, `.worktreeinclude`) para elegir archivos; la denegación sigue
+ * siendo `isDeniedPath`.
+ */
+export function matchesGlob(pattern, file, options = {}) {
+  return matchesOne(pattern, file, options);
+}
+
 /** ¿Está el archivo en la lista de denegación? `file` puede ser relativo al repo o absoluto. */
 export function isDeniedPath(file, patterns = DEFAULT_SECRET_DENYLIST, options = {}) {
   let denied = false;

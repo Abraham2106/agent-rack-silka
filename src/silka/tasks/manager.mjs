@@ -1,7 +1,18 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { silkaError } from '../codemode/errors.mjs';
 import { registerTaskRepo } from './repo-registry.mjs';
 import { warnLiveWorktreeBudget } from './disk.mjs';
-import { diffSummary, currentCommit, findGitRoot } from './git.mjs';
+import { diffSummary, currentCommit, findGitRoot, gitRun } from './git.mjs';
+import { RECIPE_FILE, commandsFor, readRecipe, workspaceEnv } from './recipe.mjs';
+import {
+  copyWorkspaceFiles,
+  listWorkspaceRuns,
+  runArchiveCommands,
+  startWorkspaceRun,
+  stopAllWorkspaceRuns,
+  stopWorkspaceRun,
+} from './workspace.mjs';
 import { buildDeliveryCard } from './card.mjs';
 import { writeTaskLog, readTaskLogRef } from './log-store.mjs';
 import { validateTaskList, normalizeTaskInput } from './model.mjs';
@@ -438,12 +449,20 @@ export class TaskManager {
   prepareWorktree(taskId) {
     const task = getTask(this.repoRoot, taskId);
     if (!task?.worktreePath) return false;
-    const setupSpec = setupForTask(task, this.repoRoot);
-    const sr = runSetupWithEvidence(this.repoRoot, taskId, task.worktreePath, setupSpec, {
-      timeoutMs: this.verifyTimeoutMs,
-      env: portsEnv(task.allocatedPorts),
-      repoRootForLink: this.repoRoot,
-    });
+    const { recipe, errors: recipeErrors } = this.recipeFor();
+    const sr = recipeErrors.length
+      ? {
+          ok: false,
+          items: [{ kind: 'setup', ok: false, cmd: `${RECIPE_FILE}: ${recipeErrors.join('; ')}`, exitCode: null, durationMs: 0, ref: null }],
+          setupRef: null,
+          log: '',
+        }
+      : runSetupWithEvidence(this.repoRoot, taskId, task.worktreePath, this.setupSpecFor(task), {
+          timeoutMs: this.verifyTimeoutMs,
+          env: this.envFor(task),
+          repoRootForLink: this.repoRoot,
+          shell: recipe?.shell ?? null,
+        });
     const hash = lockfileHash(task.worktreePath);
     if (sr.ok) {
       mutateTaskStore(this.repoRoot, (store) => {
@@ -546,7 +565,11 @@ export class TaskManager {
     for (const pick of pickList) {
       const baseCommit = currentCommit(this.repoRoot);
       const wt = createTaskWorktree(this.repoRoot, pick.id, baseCommit, { denylist: silkaSecretDenylist() });
-      const ports = pick.ports > 0 ? allocatePorts(this.repoRoot, pick.id, pick.ports) : [];
+      // FR-TK-13 / FR-TK-14: con receta, se copian los no versionados y se reserva el rango de puertos.
+      const { recipe } = this.recipeFor();
+      if (recipe) copyWorkspaceFiles(this.repoRoot, wt.worktreePath, recipe);
+      const portCount = pick.ports > 0 ? pick.ports : (recipe ? recipe.ports : 0);
+      const ports = portCount > 0 ? allocatePorts(this.repoRoot, pick.id, portCount) : [];
       mutateTaskStore(this.repoRoot, (store) => {
         const task = store.tasks.find((t) => t.id === pick.id);
         if (!task) return store;
@@ -572,6 +595,91 @@ export class TaskManager {
     return portsEnv(task?.allocatedPorts);
   }
 
+  /** silka.json del repo (FR-TK-12). `recipe` es null si no hay archivo o si no valida. */
+  recipeFor() {
+    return readRecipe(this.repoRoot);
+  }
+
+  /** Setup de la tarea: el de la receta si lo declara para esta plataforma; si no, el de siempre. */
+  setupSpecFor(task) {
+    const { recipe } = this.recipeFor();
+    if (recipe?.setup != null) {
+      return { mode: 'install', commands: commandsFor(recipe.setup), source: 'declarado' };
+    }
+    return setupForTask(task, this.repoRoot);
+  }
+
+  /** Variables de entorno de la tarea (FR-TK-14): puertos y SILKA_* para setup, run, verify y agente. */
+  envFor(task) {
+    const ports = task?.allocatedPorts || [];
+    const branch = gitRun(this.repoRoot, ['symbolic-ref', '--short', '-q', 'HEAD'], { repoRoot: this.repoRoot });
+    return {
+      ...portsEnv(ports),
+      ...workspaceEnv({
+        taskId: task?.id,
+        worktreePath: task?.worktreePath,
+        rootPath: this.repoRoot,
+        workspaceName: path.basename(path.resolve(this.repoRoot)),
+        defaultBranch: branch.ok && branch.stdout.trim() ? branch.stdout.trim() : 'main',
+        ports,
+      }),
+    };
+  }
+
+  /** `silka workspace run <tarea> <nombre>`: lanza un comando `run` de la receta en el worktree. */
+  startTaskRun(taskId, name) {
+    const task = getTask(this.repoRoot, taskId);
+    if (!task?.worktreePath) throw silkaError('E_POLICY', `La tarea ${taskId} no tiene worktree.`);
+    const { recipe } = this.recipeFor();
+    if (!recipe) throw silkaError('E_POLICY', `No hay ${RECIPE_FILE} válido en el repo.`);
+    if (!Object.prototype.hasOwnProperty.call(recipe.run, name)) {
+      throw silkaError('E_NOT_FOUND', `La receta no define el run "${name}".`);
+    }
+    const command = commandsFor(recipe.run[name]).join(' && ');
+    if (!command) throw silkaError('E_POLICY', `El run "${name}" no tiene comando para esta plataforma.`);
+    return startWorkspaceRun({
+      repoRoot: this.repoRoot,
+      wt: task.worktreePath,
+      name,
+      command,
+      shell: recipe.shell,
+      env: this.envFor(task),
+      runMode: recipe.runMode,
+    });
+  }
+
+  /** `silka workspace stop <tarea> [nombre]`: detiene uno o todos los runs de la tarea. */
+  stopTaskRun(taskId, name = null) {
+    const task = getTask(this.repoRoot, taskId);
+    if (!task?.worktreePath) throw silkaError('E_POLICY', `La tarea ${taskId} no tiene worktree.`);
+    const ports = task.allocatedPorts || [];
+    if (name) return [stopWorkspaceRun(task.worktreePath, name, { ports })];
+    return stopAllWorkspaceRuns(task.worktreePath, { ports });
+  }
+
+  listTaskRuns(taskId) {
+    const task = getTask(this.repoRoot, taskId);
+    return task?.worktreePath ? listWorkspaceRuns(task.worktreePath) : [];
+  }
+
+  /**
+   * `archive` de la tarea (FR-TK-15): detiene el árbol de procesos de sus runs, corre el `archive`
+   * de la receta y solo después quita el worktree y libera los puertos.
+   */
+  archiveTaskWorkspace(taskId) {
+    const task = getTask(this.repoRoot, taskId);
+    if (!task) throw silkaError('E_NOT_FOUND', `Tarea no encontrada: ${taskId}`);
+    if (task.sessionAlive) throw silkaError('E_POLICY', `La tarea ${taskId} tiene una sesión viva; no se archiva.`);
+    const wt = task.worktreePath;
+    const { recipe } = this.recipeFor();
+    const stops = wt ? stopAllWorkspaceRuns(wt, { ports: task.allocatedPorts || [] }) : [];
+    const archive = wt && recipe
+      ? runArchiveCommands(wt, commandsFor(recipe.archive), { shell: recipe.shell, env: this.envFor(task) })
+      : [];
+    this.cleanupTask(taskId);
+    return { taskId, stops, archive, worktreeRemoved: !wt || !fs.existsSync(wt) };
+  }
+
   async runAgentTurn(taskId, workFn, { agentNotes } = {}) {
     const task = getTask(this.repoRoot, taskId);
     if (!task) throw silkaError('E_NOT_FOUND', `Tarea no encontrada: ${taskId}`);
@@ -583,7 +691,7 @@ export class TaskManager {
     }
     this.setSessionAlive(taskId, true);
     try {
-      await workFn(task.worktreePath, portsEnv(task.allocatedPorts));
+      await workFn(task.worktreePath, this.envFor(task));
     } finally {
       this.setSessionAlive(taskId, false);
     }
@@ -650,7 +758,7 @@ export class TaskManager {
     if (!runVerify || !current) return current?.card;
 
     const verifyCmds = assertVerifyDeclared(current.verify, { allowNoVerify: current.allowNoVerify });
-    const env = portsEnv(current.allocatedPorts);
+    const env = this.envFor(current);
     let evidence = [];
     let verifyRef = writeTaskLog(this.repoRoot, taskId, 'verify', '');
     let allOk = true;
@@ -689,11 +797,12 @@ export class TaskManager {
       // Setup hecho al crear el worktree y el lockfile no cambió: no se repite.
       evidence.push({ kind: 'setup', ok: true, cmd: '(setup al crear el worktree; lockfile sin cambios)', exitCode: 0, durationMs: 0, ref: null });
     } else {
-      const setupSpec = setupForTask(current, this.repoRoot);
+      const setupSpec = this.setupSpecFor(current);
       const sr = runSetupWithEvidence(this.repoRoot, taskId, current.worktreePath, setupSpec, {
         timeoutMs: this.verifyTimeoutMs,
         env,
         repoRootForLink: this.repoRoot,
+        shell: this.recipeFor().recipe?.shell ?? null,
       });
       evidence = evidence.concat(sr.items);
       allOk = allOk && sr.ok;
@@ -703,6 +812,7 @@ export class TaskManager {
       const vr = runVerifyWithEvidence(this.repoRoot, taskId, current.worktreePath, verifyCmds, {
         timeoutMs: this.verifyTimeoutMs,
         env,
+        shell: this.recipeFor().recipe?.shell ?? null,
       });
       // Se suma a la del setup (antes la sobrescribía y la ficha perdía el setup).
       evidence = evidence.concat(vr.items);

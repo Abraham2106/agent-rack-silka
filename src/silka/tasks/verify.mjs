@@ -2,14 +2,28 @@ import { spawnSync } from 'node:child_process';
 import { silkaError } from '../codemode/errors.mjs';
 import { harnessFreeEnv } from '../hub.mjs';
 import { writeTaskLog } from './log-store.mjs';
+import { expandCommand, shellInvocation } from './recipe.mjs';
 
 /**
  * Ejecuta un comando de shell en cwd (verify / accept.cmd).
  * En Windows usa windowsVerbatimArguments para que cmd.exe no rompa comillas internas.
+ * Con `shell` (receta del workspace) usa ese shell y expande `${NAME}` con `env` antes de lanzarlo.
  */
-export function spawnShellCommand(cwd, cmd, { timeoutMs = 120_000, env = {} } = {}) {
+export function spawnShellCommand(cwd, cmd, { timeoutMs = 120_000, env = {}, shell = null } = {}) {
   const started = Date.now();
   const mergedEnv = { ...harnessFreeEnv(process.env), ...env };
+  if (shell) {
+    const inv = shellInvocation(shell, expandCommand(cmd, env));
+    return spawnSync(inv.file, inv.args, {
+      cwd,
+      encoding: 'utf8',
+      timeout: Math.max(1000, timeoutMs - (Date.now() - started)),
+      env: mergedEnv,
+      windowsHide: true,
+      windowsVerbatimArguments: inv.verbatim,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+  }
   if (process.platform === 'win32') {
     return spawnSync('cmd.exe', ['/d', '/s', '/c', `"${cmd}"`], {
       cwd,
@@ -32,11 +46,11 @@ export function spawnShellCommand(cwd, cmd, { timeoutMs = 120_000, env = {} } = 
 }
 
 /** SEC-07: solo comandos declarados en la tarea, nunca sugerencias del agente. */
-export function runVerifyCommands(cwd, commands, { timeoutMs = 120_000, env = {} } = {}) {
+export function runVerifyCommands(cwd, commands, { timeoutMs = 120_000, env = {}, shell = null } = {}) {
   const logs = [];
   let ok = true;
   for (const cmd of commands || []) {
-    const r = spawnShellCommand(cwd, cmd, { timeoutMs, env });
+    const r = spawnShellCommand(cwd, cmd, { timeoutMs, env, shell });
     const block = [
       `$ ${cmd}`,
       `exit: ${r.status ?? '?'}`,
@@ -53,14 +67,14 @@ export function runVerifyCommands(cwd, commands, { timeoutMs = 120_000, env = {}
 }
 
 /** Ejecuta verify con evidencia por comando (comando, salida, duración, ref). */
-export function runVerifyWithEvidence(repoRoot, taskId, cwd, commands, { timeoutMs = 120_000, env = {} } = {}) {
+export function runVerifyWithEvidence(repoRoot, taskId, cwd, commands, { timeoutMs = 120_000, env = {}, shell = null } = {}) {
   const items = [];
   const blocks = [];
   let allOk = true;
   let idx = 0;
   for (const cmd of commands || []) {
     const started = Date.now();
-    const r = spawnShellCommand(cwd, cmd, { timeoutMs, env });
+    const r = spawnShellCommand(cwd, cmd, { timeoutMs, env, shell });
     const durationMs = Date.now() - started;
     const block = [
       `$ ${cmd}`,
