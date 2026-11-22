@@ -302,6 +302,19 @@ test('WR-04: archive detiene el run, corre el comando archive, quita el worktree
   }
 });
 
+// --- 3.3: silka.workspace.* en Code Mode -----------------------------------------------------
+
+test('3.3: silka.workspace.* valida sus argumentos y una tarea solo los usa sobre sí misma', async () => {
+  const { validateApiArgs } = await import('../src/silka/codemode/api-schema.mjs');
+  const { taskScopeViolation } = await import('../src/silka/containment.mjs');
+  assert.deepEqual(validateApiArgs(['workspace', 'run'], ['tk-1', 'dev']), ['tk-1', 'dev']);
+  assert.deepEqual(validateApiArgs(['workspace', 'stop'], ['tk-1']), ['tk-1', undefined]);
+  assert.throws(() => validateApiArgs(['workspace', 'run'], ['tk-1']));
+  assert.equal(taskScopeViolation('workspace.run', ['tk-1', 'dev'], 'tk-1'), null);
+  assert.match(taskScopeViolation('workspace.archive', ['tk-2'], 'tk-1'), /no puede usar workspace\.archive sobre tk-2/);
+  assert.equal(taskScopeViolation('workspace.runs', ['tk-1'], undefined), null, 'el manager no tiene tarea propia');
+});
+
 // --- WR-05: runMode exclusive --------------------------------------------------------------
 
 test('WR-05: con runMode exclusive un segundo run se rechaza con el motivo', async () => {
