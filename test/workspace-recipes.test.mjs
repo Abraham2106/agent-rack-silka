@@ -239,35 +239,38 @@ test('WR-03: con receta, el manager copia lo que no es secreto y asigna el rango
 
 // --- WR-04: run, stop y archive con procesos reales -----------------------------------------
 
-test('WR-04: run con servidor vivo y stop cierra el árbol y libera el puerto', { skip: !WIN && 'cierre de árbol probado en Windows' }, async () => {
-  const repo = initRepo();
-  const id = 'wr-run';
-  const wt = createTaskWorktree(repo, id, headCommit(repo), { denylist: [] }).worktreePath;
-  const ports = allocatePorts(repo, id, 1);
-  try {
-    // cmd -> node: el servidor es nieto del shell, así que el cierre tiene que alcanzarlo por el árbol.
-    startWorkspaceRun({
-      repoRoot: repo,
-      wt,
-      name: 'dev',
-      command: 'node -e "require(\'http\').createServer(() => {}).listen(${SILKA_PORT})"',
-      shell: 'cmd',
-      env: { SILKA_PORT: String(ports[0]) },
-    });
-    const up = await waitFor(() => !portsAreFree(ports));
-    assert.ok(up, 'el servidor escucha en su puerto');
-    const pid = JSON.parse(fs.readFileSync(path.join(wt, '.silka', 'runs', 'dev.json'), 'utf8')).pid;
+for (const shell of ['cmd', 'pwsh']) {
+  test(`WR-04: run con servidor vivo (${shell}) y stop cierra el árbol y libera el puerto`, { skip: !WIN && 'cierre de árbol probado en Windows' }, async () => {
+    const repo = initRepo();
+    const id = `wr-run-${shell}`;
+    const wt = createTaskWorktree(repo, id, headCommit(repo), { denylist: [] }).worktreePath;
+    const ports = allocatePorts(repo, id, 1);
+    try {
+      // shell -> node: el servidor es nieto del shell, así que el cierre tiene que alcanzarlo por el árbol.
+      // pwsh se prueba aparte: con `detached` en Windows, powershell.exe muere al lanzarlo (ya corregido).
+      startWorkspaceRun({
+        repoRoot: repo,
+        wt,
+        name: 'dev',
+        command: 'node -e "require(\'http\').createServer(() => {}).listen(${SILKA_PORT})"',
+        shell,
+        env: { SILKA_PORT: String(ports[0]) },
+      });
+      const up = await waitFor(() => !portsAreFree(ports));
+      assert.ok(up, 'el servidor escucha en su puerto');
+      const pid = JSON.parse(fs.readFileSync(path.join(wt, '.silka', 'runs', 'dev.json'), 'utf8')).pid;
 
-    const stopped = stopWorkspaceRun(wt, 'dev', { ports });
-    assert.equal(stopped.stopped, true);
-    assert.equal(stopped.portsFree, true, 'el puerto queda libre tras el cierre');
-    assert.equal(isPidAlive(pid), false, 'el proceso del run ya no vive');
-  } finally {
-    stopWorkspaceRun(wt, 'dev', { ports });
-    releasePorts(repo, id);
-    removeTaskWorktree(repo, id, wt);
-  }
-});
+      const stopped = stopWorkspaceRun(wt, 'dev', { ports });
+      assert.equal(stopped.stopped, true);
+      assert.equal(stopped.portsFree, true, 'el puerto queda libre tras el cierre');
+      assert.equal(isPidAlive(pid), false, 'el proceso del run ya no vive');
+    } finally {
+      stopWorkspaceRun(wt, 'dev', { ports });
+      releasePorts(repo, id);
+      removeTaskWorktree(repo, id, wt);
+    }
+  });
+}
 
 test('WR-04: archive detiene el run, corre el comando archive, quita el worktree y deja node_modules intacto', { skip: !WIN && 'Windows' }, async () => {
   const repo = initRepo();

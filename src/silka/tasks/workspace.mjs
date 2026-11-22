@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { harnessFreeEnv } from '../hub.mjs';
 import { worktreesBase } from '../paths.mjs';
@@ -17,6 +18,7 @@ import { spawnShellCommand } from './verify.mjs';
  */
 
 const RUNS_DIR = path.join('.silka', 'runs');
+const RUN_HOST = fileURLToPath(new URL('./run-host.mjs', import.meta.url));
 
 // ---------------------------------------------------------------------------------------------
 // Copia (FR-TK-13)
@@ -191,19 +193,18 @@ export function startWorkspaceRun({ repoRoot, wt, name, command, shell = null, e
     fs.mkdirSync(dir, { recursive: true });
     const logPath = path.join(dir, `${name}.log`);
     const fd = fs.openSync(logPath, 'a');
-    let child;
-    try {
-      child = spawn(inv.file, inv.args, {
-        cwd: wt,
-        env: { ...harnessFreeEnv(process.env), ...env },
-        detached: true,
-        stdio: ['ignore', fd, fd],
-        windowsHide: true,
-        windowsVerbatimArguments: inv.verbatim,
+    // El fd se cierra cuando termina el proceso (si el padre sigue vivo). Es el log del run.
+    const env2 = { ...harnessFreeEnv(process.env), ...env };
+    // Windows: el run lo sostiene run-host.mjs (detached); ver ahí por qué. Posix: el shell directo.
+    const child = process.platform === 'win32'
+      ? spawn(process.execPath, [RUN_HOST, JSON.stringify({ file: inv.file, args: inv.args, verbatim: inv.verbatim })], {
+        cwd: wt, env: env2, detached: true, stdio: ['ignore', fd, fd], windowsHide: true,
+      })
+      : spawn(inv.file, inv.args, {
+        cwd: wt, env: env2, detached: true, stdio: ['ignore', fd, fd], windowsHide: true,
       });
-    } finally {
-      fs.closeSync(fd);
-    }
+    child.on('exit', () => { try { fs.closeSync(fd); } catch { /* ya cerrado */ } });
+    child.on('error', () => { try { fs.closeSync(fd); } catch { /* ya cerrado */ } });
     child.unref();
     if (!child.pid) throw new Error(`no pude lanzar "${name}"`);
     const state = { name, pid: child.pid, command: cmd, shell: shell || null, startedAt: new Date().toISOString(), log: logPath };
