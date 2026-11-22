@@ -7,6 +7,7 @@ import { createIntegrationService } from '../integration/service.mjs';
 import { createReviewService } from '../review/service.mjs';
 import { auditBlocked, taskScopeViolation } from '../containment.mjs';
 import { createTaskManager } from '../tasks/manager.mjs';
+import { addMemory, confirmMemory, expireMemory, listMemory, replaceMemory } from '../memory.mjs';
 import { planFromFile, planFromList } from '../tasks/plan.mjs';
 import { readTaskLogRef } from '../tasks/log-store.mjs';
 import { validateApiArgs } from './api-schema.mjs';
@@ -205,6 +206,22 @@ export function createApiDispatcher(ctx) {
     if (method === 'state.decide') {
       const text = await ctx.callBridgeTool('silka_decide', { workspace: ctx.workspace, text: validated[0] });
       return typeof text === 'string' ? text : hubText(text);
+    }
+
+    if (method === 'memory.list') {
+      return listMemory(ctx.workspace, validated[0] || {});
+    }
+    if (method === 'memory.add') {
+      return addMemory(ctx.workspace, { author: 'manager', ...validated[0] });
+    }
+    if (method === 'memory.confirm') {
+      return confirmMemory(ctx.workspace, validated[0], { by: 'manager' });
+    }
+    if (method === 'memory.expire') {
+      return expireMemory(ctx.workspace, validated[0], { by: 'manager' });
+    }
+    if (method === 'memory.replace') {
+      return replaceMemory(ctx.workspace, validated[0], validated[1], { by: 'manager' });
     }
 
     if (method === 'agents.list') {
