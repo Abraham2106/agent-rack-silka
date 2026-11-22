@@ -33,7 +33,9 @@ export function readProcessStartMs(pid) {
   const id = Number(pid);
   if (!Number.isInteger(id) || id <= 0) return null;
   if (process.platform === 'win32') {
-    const script = `(Get-Process -Id ${id} -ErrorAction Stop).StartTime.ToUniversalTime().Subtract([datetime]'1970-01-01Z').TotalMilliseconds`;
+    // DateTimeOffset y no [datetime]'1970-01-01Z': ese literal se lee en hora local y el resultado
+    // salía corrido por el huso horario (6 h en UTC-6); todo pid vivo parecía "reusado".
+    const script = `([DateTimeOffset](Get-Process -Id ${id} -ErrorAction Stop).StartTime).ToUnixTimeMilliseconds()`;
     const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
       encoding: 'utf8',
       windowsHide: true,

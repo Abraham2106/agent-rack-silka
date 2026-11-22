@@ -204,7 +204,7 @@ export class TaskManager {
     return rows.map((t) => launchPayload(getTask(this.repoRoot, t.id) || t));
   }
 
-  async startPendingSessions({ callHub, defaultAgent = 'codex', defaultModel = '', log = () => {} } = {}) {
+  async startPendingSessions({ callHub, defaultAgent = 'codex', defaultModel = '', log = () => {}, jobs } = {}) {
     // Solo tareas que siguen vivas: antes arrancaba sesiones de tareas ya descartadas.
     const startable = new Set([STATES.PLANIFICADA, STATES.ESPERANDO_DEPS]);
     const pending = this.list().filter((t) => t.awaitingHubSession && t.worktreePath && startable.has(t.state));
@@ -215,6 +215,12 @@ export class TaskManager {
       if (!isValidWorktree(task.worktreePath)) {
         this.blockTask(task.id, `worktree ausente o dañado: ${task.worktreePath}`);
         log(`[silka] ${task.id} bloqueada: su worktree no es válido.`);
+        continue;
+      }
+      // BUG-11: en el hub, el setup (p. ej. npm install) corre en un proceso aparte; la sesión
+      // del agente se crea en un ciclo posterior, cuando el setup ya terminó.
+      if (!task.setupDoneAt && jobs) {
+        if (!jobs.busy(this.repoRoot, task)) jobs.start('setup', this.repoRoot, task.id);
         continue;
       }
       // Setup al crear el worktree, antes del agente: así trabaja con sus dependencias.
@@ -442,14 +448,25 @@ export class TaskManager {
     return this.finishAgentTurn(taskId, { agentNotes });
   }
 
-  tryFinishAfterSession(taskId, { agentNotes } = {}) {
+  /** ¿Toca cerrar el turno (verificar y hacer la ficha) ahora que la sesión terminó? */
+  needsFinishAfterSession(taskId) {
     const task = getTask(this.repoRoot, taskId);
     if (!task) return false;
     if (task.state === STATES.LISTA || task.state === STATES.VERIFICACION_FALLIDA) return false;
     if (task.state === STATES.REPARANDO && !task.pendingRepair) return false;
     if (task.sessionAlive) return false;
     if (task.state === STATES.VERIFICANDO && task.card) return false;
-    if (task.state !== STATES.TRABAJANDO && task.state !== STATES.VERIFICANDO) return false;
+    return task.state === STATES.TRABAJANDO || task.state === STATES.VERIFICANDO;
+  }
+
+  tryFinishAfterSession(taskId, { agentNotes, jobs } = {}) {
+    if (!this.needsFinishAfterSession(taskId)) return false;
+    if (jobs) {
+      // BUG-11: en el hub, el verify corre en un proceso aparte; la ficha llega en otro ciclo.
+      const task = getTask(this.repoRoot, taskId);
+      if (jobs.busy(this.repoRoot, task)) return false;
+      return jobs.start('verify', this.repoRoot, taskId);
+    }
     this.finishAgentTurn(taskId, { agentNotes });
     return true;
   }

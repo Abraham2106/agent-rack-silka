@@ -192,3 +192,35 @@ de un solo intento, no una prueba de que BUG-05 esté resuelto.
 
 `scripts/silka-launch.mjs` sale en cuanto las tareas arrancan, así que nadie recibe aviso al terminar. El estado
 se mira con `silka task ls` y `silka review ls`. Pendiente decidir si el script debe esperar (`waitAll`).
+
+## BUG-11 · El verify corría dentro del hub y lo congelaba
+
+**Síntoma:** con un verify largo (`npm test`, ~3 min con setup) el hub dejaba de responder, se caía la conexión
+del supervisor con agent-rack (`fetch failed`, `MCP error -32000: Connection closed`) y el vigilante de 2 min
+podía darlo por colgado. Reproducido con `npm run e2e:ciclo`: un verify de 25 s dejaba el proceso del hub
+quieto 25,8 s (pausa máxima del bucle de eventos) y aparecía `Connection closed`.
+
+**Causa:** el supervisor del hub corría setup y verify con `spawnSync` dentro de su ciclo. Mientras tanto el
+proceso no atendía nada: ni el SSE con agent-rack, ni los temporizadores, ni los demás supervisores.
+
+**Arreglo:**
+- `src/silka/tasks/jobs.mjs` (lanzador) y `job-worker.mjs` (proceso aparte): el supervisor del hub lanza
+  `node job-worker.mjs <setup|verify> <repo> <tarea>` y sigue; el proceso corre el mismo código de antes y deja
+  el resultado en el store de tareas. El ciclo dura milisegundos aunque el verify tarde minutos, así que el
+  vigilante de 2 min (que mira la duración del ciclo) ya no lo ve.
+- Un solo trabajo por tarea a la vez. El proceso deja su marca (`job: {pid, startedAt}`) en la tarea; tras
+  reiniciar el hub, una tarea `verificando` sin ficha cuyo proceso ya no vive se relanza; si vive (mismo pid y
+  hora de inicio), se espera.
+- La sesión del agente se crea cuando el setup terminó (ciclo posterior). Un setup fallido deja la tarea en
+  `verificacion_fallida` como antes.
+- Fuera del hub (pruebas, `silka task verify`) todo sigue en línea, como antes.
+- Hallazgo de paso: `readProcessStartMs` en Windows devolvía la hora corrida por el huso horario (6 h en
+  UTC-6): el literal `[datetime]'1970-01-01Z'` se leía en hora local. Todo pid vivo parecía "reusado"; afectaba
+  a la detección de candados rancios de `lock.mjs`. Ahora usa `DateTimeOffset`.
+- Límite que sigue: cada comando de verify tiene un tope de 120 s (`verifyTimeoutMs`); un verify más largo falla
+  por tiempo. No cambia con este arreglo.
+- Pruebas: `test/jobs.test.mjs` (el ciclo no espera al verify ni al setup, setup fallido, verify interrumpido se
+  relanza, marca con pid vivo/reusado, `startTaskSupervisor` sin pausas, hora de inicio real).
+- **Prueba real:** `npm run e2e:ciclo` con los cuatro escenarios: pausa máxima del proceso 72 ms durante el
+  verify de 25 s (antes 25 790 ms) y sin `Connection closed`. Con `--escenarios lento --verify-s 150` (verify de
+  150 s en dos tramos, más que el vigilante de 2 min): ficha pass, pausa máxima 98 ms, sin aviso de ciclo colgado.

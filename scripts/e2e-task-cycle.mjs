@@ -9,7 +9,7 @@
 //   entrega  el agente crea un archivo → ficha pass, con evidencia session + diff + verify.
 //   vacio    el agente no cambia nada (maxRepairs 0) → ficha fail por diff y el verify no se corre (BUG-09).
 //   caida    la sesión termina en error (modelo inexistente) → ficha fail por session, sin verify (BUG-09).
-//   lento    verify de ~25 s: el supervisor no se congela mientras corre (BUG-11).
+//   lento    verify de 25 s (--verify-s N para otro largo; con 150 pasa el vigilante de 2 min): el supervisor no se congela mientras corre (BUG-11).
 // No toca el registro real de repos ni las tareas del repo de Silka: usa SILKA_CONFIG_DIR temporal
 // y vigila solo el repo desechable.
 import { spawn } from 'node:child_process';
@@ -22,6 +22,7 @@ const port = Number(arg('port', 18997));
 const agent = arg('agent', 'opencode');
 const model = arg('model', 'opencode/hy4-flash-free');
 const scenarios = String(arg('escenarios', 'entrega,vacio,caida,lento')).split(',').map((s) => s.trim()).filter(Boolean);
+const slowSeconds = Number(arg('verify-s', 25));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Config temporal ANTES de importar Silka: las tareas de prueba no ensucian la config real.
@@ -85,7 +86,11 @@ const SPECS = {
     scope: 'lento.txt',
     deliver: 'lento.txt con el texto lento',
     prompt: 'Crea en este directorio un archivo llamado lento.txt cuyo contenido sea exactamente: lento\nNo hagas nada más. No hagas commits.',
-    verify: 'node -e "setTimeout(()=>process.exit(0),25000)"',
+    // Cada comando de verify tiene un tope de 120 s: un verify más largo se parte en tramos de ≤ 90 s.
+    verify: Array.from({ length: Math.ceil(slowSeconds / 90) }, (_, i) => {
+      const ms = Math.round((slowSeconds * 1000) / Math.ceil(slowSeconds / 90));
+      return `node -e "setTimeout(()=>process.exit(0),${ms})" tramo-${i + 1}`;
+    }),
     maxRepairs: 0,
   },
 };
@@ -131,7 +136,7 @@ try {
   });
 
   const terminal = new Set([STATES.LISTA, STATES.VERIFICACION_FALLIDA, STATES.BLOQUEADA, STATES.DESCARTADA]);
-  const deadline = Date.now() + 6 * 60_000;
+  const deadline = Date.now() + 6 * 60_000 + slowSeconds * 1000;
   let lagDuringVerify = 0;
   while (Date.now() < deadline) {
     await sleep(1000);

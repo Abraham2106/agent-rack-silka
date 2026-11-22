@@ -2,6 +2,7 @@ import { isBusy } from '../format.mjs';
 import { loadSilkaConfig } from '../hub.mjs';
 import { findGitRoot } from './git.mjs';
 import { createHubCallAdapter } from './hub-call.mjs';
+import { createJobRunner } from './jobs.mjs';
 import { createTaskManager } from './manager.mjs';
 import { readTaskStore } from './store.mjs';
 import { listTaskRepos } from './repo-registry.mjs';
@@ -50,7 +51,11 @@ export async function sessionOutcomeFor(client, session) {
   return { outcome, detail: summary };
 }
 
-export async function superviseTasksOnce(client, { repoRoots, defaultAgent = 'codex', defaultModel = '', log = () => {} } = {}) {
+/**
+ * Un ciclo del supervisor. Con `jobs` (el hub), setup y verify se lanzan en un proceso aparte y
+ * el ciclo no espera (BUG-11); sin `jobs` (pruebas, CLI) corren en línea como antes.
+ */
+export async function superviseTasksOnce(client, { repoRoots, defaultAgent = 'codex', defaultModel = '', log = () => {}, jobs } = {}) {
   const callHub = createHubCallAdapter(client);
   let byId = new Map((await client.listSessions()).map((s) => [s.sessionId, s]));
   let n = 0;
@@ -60,7 +65,7 @@ export async function superviseTasksOnce(client, { repoRoots, defaultAgent = 'co
       mgr = createTaskManager(repoRoot);
       mgr.warnDiskIfNeeded();
       // eslint-disable-next-line no-await-in-loop
-      const started = await mgr.startPendingSessions({ callHub, defaultAgent, defaultModel, log });
+      const started = await mgr.startPendingSessions({ callHub, defaultAgent, defaultModel, log, jobs });
       n += started.length;
       if (started.length) {
         log(`[silka] sesiones arrancadas en ${repoRoot}: ${started.join(", ")}`);
@@ -77,6 +82,11 @@ export async function superviseTasksOnce(client, { repoRoots, defaultAgent = 'co
     }
 
     for (const task of mgr.list()) {
+      // Verify interrumpido (el hub o su proceso se cayó a mitad): se relanza si nadie lo corre.
+      if (jobs && task.state === STATES.VERIFICANDO && !task.card && !jobs.busy(repoRoot, task)) {
+        if (jobs.start('verify', repoRoot, task.id)) n += 1;
+        continue;
+      }
       if (task.state !== STATES.TRABAJANDO || !task.sessionId) continue;
       const session = byId.get(task.sessionId);
       const busy = session ? isBusy(session.status) : false;
@@ -90,7 +100,7 @@ export async function superviseTasksOnce(client, { repoRoots, defaultAgent = 'co
           mgr.recordSessionOutcome(task.id, outcome, detail);
         }
         mgr.finalizePendingDiscard(task.id);
-        if (mgr.tryFinishAfterSession(task.id)) n += 1;
+        if (mgr.tryFinishAfterSession(task.id, { jobs })) n += 1;
       }
     }
     // eslint-disable-next-line no-await-in-loop
@@ -102,7 +112,7 @@ export async function superviseTasksOnce(client, { repoRoots, defaultAgent = 'co
 /** Un ciclo que no termina en este tiempo se da por colgado (p. ej. una respuesta del hub que no llega). */
 const TICK_HANG_MS = 120_000;
 
-export function startTaskSupervisor({ readRuntime, connect, intervalMs = 400, defaultAgent, defaultModel, repoRoots, log = (m) => console.error(m) } = {}) {
+export function startTaskSupervisor({ readRuntime, connect, intervalMs = 400, defaultAgent, defaultModel, repoRoots, log = (m) => console.error(m), jobs = createJobRunner({ log }) } = {}) {
   let client = null;
   let token = '';
   let running = false;
@@ -130,7 +140,7 @@ export function startTaskSupervisor({ readRuntime, connect, intervalMs = 400, de
         client = await connect(runtime);
       }
       if (!client) log('[silka] supervisor de tareas: conectando con el hub');
-      if (client) await superviseTasksOnce(client, { repoRoots, defaultAgent, defaultModel, log });
+      if (client) await superviseTasksOnce(client, { repoRoots, defaultAgent, defaultModel, log, jobs });
       lastError = '';
     } catch (err) {
       // Antes se tragaba en silencio: las tareas quedaban "planificadas" sin que nadie supiera por qué.
@@ -145,9 +155,12 @@ export function startTaskSupervisor({ readRuntime, connect, intervalMs = 400, de
     }
   }, intervalMs);
   timer.unref?.();
-  return async () => {
+  const stop = async () => {
     clearInterval(timer);
     if (client) await client.close().catch(() => {});
     client = null;
   };
+  // Los trabajos en curso (verify) no se matan al parar: terminan solos y dejan su ficha.
+  stop.jobs = jobs;
+  return stop;
 }
