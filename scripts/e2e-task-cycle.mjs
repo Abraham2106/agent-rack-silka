@@ -41,6 +41,7 @@ const { startTaskSupervisor } = await import('../src/silka/tasks/supervisor.mjs'
 const { STATES } = await import('../src/silka/tasks/states.mjs');
 const { prepareWorktreeRemoval } = await import('../src/silka/tasks/worktree-cleanup.mjs');
 const { removeTaskWorktree } = await import('../src/silka/tasks/worktree.mjs');
+const { worktreesBase } = await import('../src/silka/paths.mjs');
 
 const { root, config } = loadSilkaConfig();
 const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'silka-e2e-cycle-repo-'));
@@ -204,6 +205,7 @@ tope de sesiones ${maxSessions}: ${limitLines.length} aviso(s) de tope en el log
     removeTaskWorktree(repo, t.id, t.worktreePath);
   }
   gitRun(repo, ['worktree', 'prune'], { repoRoot: repo });
+  try { fs.rmdirSync(worktreesBase(repo)); } catch { /* no estaba vacía o ya no está */ }
   try { fs.rmSync(repo, { recursive: true, force: true }); } catch { /* queda en %TEMP% */ }
   try { fs.rmSync(tmpConfig, { recursive: true, force: true }); } catch { /* queda en %TEMP% */ }
 }

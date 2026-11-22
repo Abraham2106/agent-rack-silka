@@ -67,7 +67,32 @@ TUI) vio "no hay hub" a la vez y levantó el suyo.
 supervisor luego arranca las que faltan.
 
 **Causa probable:** relacionada con BUG-04 (varios hubs) o con crear 9 worktrees de forma síncrona dentro del
-bridge. **Pendiente:** reproducir con un solo hub.
+bridge.
+
+**Reproducción con un solo hub (fase 1):** `scripts/repro-bug05.mjs` hace lo mismo que `silka_execute` en el bridge
+(cliente al hub + `launch` con `callHub`) sobre un clon desechable del repo, contra un hub de prueba (puerto
+18999, config temporal) con agent-rack real.
+- 9 tareas con setup rápido: `launch` tardó 15 s, el proceso cliente quedó **bloqueado hasta 11,2 s** seguidos
+  (worktrees y setup síncronos), **sin** `ECONNRESET`.
+- 5 tareas con setup de 8 s (`--setup-s 8`): bloqueos de hasta 13,8 s y **`ECONNRESET` en 3 de 5**
+  `createSession` ("Se cortó la conexión con el hub durante createSession"). **Reproducido con un solo hub.**
+  Causa: el `launch` corre setup y creación de worktrees de forma síncrona en el proceso del bridge, entre
+  llamadas al hub; si el proceso no atiende la conexión unos 12 s o más, se corta. Es la misma familia que BUG-11,
+  pero en el bridge.
+- **Hallazgo nuevo en esa corrida:** el `launch` del bridge y el supervisor del hub arrancaban **las mismas
+  tareas a la vez**: setup repetido y **dos sesiones del agente** para 2 de las 5 tareas (visto en la lista de
+  sesiones de agent-rack). Rompía el invariante de un solo escritor.
+
+**Arreglo de lo hallado:** reclamo de arranque por tarea (`startingBy: {pid, at}`, bajo el candado del store):
+quien prepara y arranca una tarea la reclama primero; si otro proceso vivo la tiene (menos de 10 min), la deja.
+Se suelta al crear la sesión o al fallar. Prueba `test/start-claim.test.mjs`: 3 procesos a la vez sobre 6
+tareas → 1 sesión por tarea (sin el reclamo, 3 por tarea). Repetida la corrida real de 5 tareas con setup de 8 s:
+una sesión por tarea arrancada, sin duplicados, y esta vez sin `ECONNRESET` (el hub tomó 4 de los 5 setups).
+
+**Pendiente (no arreglado):** el `launch` del bridge sigue haciendo trabajo síncrono (worktrees y, si gana el
+reclamo, el setup) y con setup lento puede cortar su conexión. Propuesta: que con hub el `launch` solo registre
+y cree worktrees, y deje setup y sesión al supervisor del hub (que ya los corre en proceso aparte). Cambia lo que
+devuelve `silka_execute` (tareas en `planificada` sin `sessionId`), por eso no se hizo aquí.
 
 ## BUG-06 · Un agente escribió en el repo principal al desaparecer su worktree
 

@@ -162,6 +162,19 @@ function noteSessionCapacity(log) {
 
 const sessionLimitActive = () => Date.now() < sessionLimit.until;
 
+/** Un reclamo de arranque vence a los 10 min aunque su proceso siga vivo (p. ej. un bridge colgado). */
+const START_CLAIM_TTL_MS = 10 * 60_000;
+
+function processAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err?.code === 'EPERM';
+  }
+}
+
 export class TaskManager {
   constructor(workspace, opts = {}) {
     this.workspace = workspace;
@@ -266,6 +279,11 @@ export class TaskManager {
     const pending = this.list().filter((t) => t.awaitingHubSession && t.worktreePath && startable.has(t.state));
     const started = [];
     for (const task of pending) {
+      // BUG-05 (hallado al reproducirlo): el launch del bridge y el supervisor del hub arrancaban
+      // la misma tarea a la vez (setup doble, dos sesiones del agente). Cada proceso reclama la
+      // tarea antes de prepararla; si otro vivo la tiene reclamada, la deja.
+      if (!this.claimStart(task.id)) continue;
+      let keepClaim = false;
       try {
       // BUG-06: nunca se arranca un agente en un worktree perdido (git caería en otro repo).
       if (!isValidWorktree(task.worktreePath)) {
@@ -277,6 +295,7 @@ export class TaskManager {
       // del agente se crea en un ciclo posterior, cuando el setup ya terminó.
       if (!task.setupDoneAt && jobs) {
         if (!jobs.busy(this.repoRoot, task)) jobs.start('setup', this.repoRoot, task.id);
+        keepClaim = true;
         continue;
       }
       // Setup al crear el worktree, antes del agente: así trabaja con sus dependencias.
@@ -309,6 +328,7 @@ export class TaskManager {
         row.awaitingHubSession = false;
         row.sessionAlive = true;
         delete row.startError;
+        delete row.startingBy;
         delete row.sessionOutcome;
         delete row.sessionOutcomeDetail;
         recordTransition(row, STATES.TRABAJANDO, 'inicio_sesion_hub');
@@ -337,9 +357,37 @@ export class TaskManager {
             return store;
           });
         }
+      } finally {
+        if (!keepClaim) this.releaseStart(task.id);
       }
     }
     return started;
+  }
+
+  /**
+   * Reclama arrancar la tarea (setup + sesión) para este proceso. Falla si otro proceso vivo la
+   * tiene reclamada hace menos de START_CLAIM_TTL_MS, o si ya no está pendiente de arrancar.
+   */
+  claimStart(taskId) {
+    let ok = false;
+    mutateTaskStore(this.repoRoot, (store) => {
+      const row = store.tasks.find((t) => t.id === taskId);
+      if (!row || !row.awaitingHubSession) return store;
+      const c = row.startingBy;
+      if (c && c.pid !== process.pid && processAlive(c.pid) && Date.now() - Number(c.at) < START_CLAIM_TTL_MS) return store;
+      if (!c || c.pid !== process.pid) row.startingBy = { pid: process.pid, at: Date.now() };
+      ok = true;
+      return store;
+    });
+    return ok;
+  }
+
+  releaseStart(taskId) {
+    mutateTaskStore(this.repoRoot, (store) => {
+      const row = store.tasks.find((t) => t.id === taskId);
+      if (row?.startingBy?.pid === process.pid) delete row.startingBy;
+      return store;
+    });
   }
 
   /** Bloquea una tarea con un motivo visible (p. ej. worktree perdido). */
