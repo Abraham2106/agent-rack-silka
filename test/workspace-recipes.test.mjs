@@ -120,7 +120,8 @@ test('WR-01: el mismo comando con ${SILKA_PORT} da la misma salida en cada shell
   const bashFound = spawnSync('where.exe', ['git'], { encoding: 'utf8' }).stdout.includes('Git');
   if (bashFound) shells.push('bash');
   for (const shell of shells) {
-    const r = spawnShellCommand(repo, 'echo puerto ${SILKA_PORT}', { shell, env, timeoutMs: 30_000 });
+    // node y no `echo`: en pwsh, `echo a b` imprime dos líneas; con node la salida es la misma en los tres.
+    const r = spawnShellCommand(repo, `node -e "console.log('puerto \${SILKA_PORT}')"`, { shell, env, timeoutMs: 30_000 });
     assert.equal(r.status, 0, `${shell}: ${r.stderr}`);
     assert.match(String(r.stdout), /puerto 19123/, `${shell} expande la variable`);
   }
@@ -210,22 +211,25 @@ test('WR-03: el entorno de la tarea trae SILKA_PORT y las variables estándar', 
   assert.ok(env.SILKA_WORKSPACE_PATH && env.SILKA_ROOT_PATH);
 });
 
-test('WR-03: con receta, el manager copia el .env* y asigna el rango de puertos', async () => {
+test('WR-03: con receta, el manager copia lo que no es secreto y asigna el rango de puertos', async () => {
   const repo = initRepo('.env*\n');
   writeRecipe(repo, {
-    copy: ['.env.local'],
+    copy: ['.env.local', '.env.example'],
     ports: 3,
     setup: `node -e "require('fs').writeFileSync('setup-env.txt', process.env.SILKA_TASK_ID + ' ' + process.env.SILKA_PORT)"`,
   });
   spawnSync('git', ['add', 'silka.json'], { cwd: repo });
   spawnSync('git', ['commit', '-m', 'receta'], { cwd: repo });
   fs.writeFileSync(path.join(repo, '.env.local'), 'LOCAL=1\n');
+  fs.writeFileSync(path.join(repo, '.env.example'), 'EXAMPLE=1\n');
   const mgr = createTaskManager(repo, { maxConcurrentTasks: 2 });
   await mgr.launch([baseTask({ id: 'wr-m1', title: 'uno' })]);
   const row = mgr.list().find((t) => t.id === 'wr-m1');
   try {
     assert.equal(row.allocatedPorts.length, 3, 'rango de la receta');
-    assert.ok(fs.existsSync(path.join(row.worktreePath, '.env.local')), 'copiado al worktree');
+    // La lista por defecto deniega .env* (salvo .env.example): un .env.local secreto NO llega al worktree.
+    assert.ok(!fs.existsSync(path.join(row.worktreePath, '.env.local')), 'secreto denegado, no copiado');
+    assert.ok(fs.existsSync(path.join(row.worktreePath, '.env.example')), 'lo no secreto sí se copia');
     assert.ok(mgr.envFor(row).SILKA_PORT, 'SILKA_PORT expuesto');
     assert.equal(mgr.envFor(row).SILKA_TASK_ID, 'wr-m1');
   } finally {
