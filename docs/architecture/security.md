@@ -47,7 +47,7 @@ Método: STRIDE por frontera de confianza, más amenazas específicas de agentes
 | TH-20 | TB3 | E | Una interrupción dirigida al proceso equivocado por reutilización de PID | Las órdenes van por id de turno, no por PID (H1, C-05) | H1 |
 | TH-21 | TB3 | E | Agente que lanza agentes para esquivar un bloqueo (p. ej. OpenCode bloqueado en `git reset` lanzó Codex fuera de Silka, sin tarea ni verify) | Profundidad máxima en el bridge (por defecto 1; el hub es agent-rack y no ve al llamador), `E_POLICY` y auditoría del intento; Codex arranca sin el MCP de agent-rack y OpenCode con `--standalone` para que su bridge herede la profundidad (`npm run e2e:contencion`). La CLI `agent-rack` por shell sigue sin bloquearse | SEC-15, FR-AC-01 |
 | TH-22 | TB3 | I/T | Una tarea lee o escribe el estado, la ficha o los logs de otra tarea | Code Mode de una tarea solo toca su propio id (`card`, `review.*`, `log:`); los `ctx:` no se leen desde una tarea; `silka_state` aún resume las sesiones del repo | SEC-16 |
-| TH-23 | TB3 | I | Un agente lee o copia `.env`, llaves privadas o `~/.ssh` | Lista de denegación (`DEFAULT_SECRET_DENYLIST`, configurable): el worktree no recibe los versionados (`skip-worktree`) y un diff que los toca es riesgo alto que exige humano | SEC-17, SEC-08 |
+| TH-23 | TB3 | I | Un agente lee o copia `.env`, llaves privadas o `~/.ssh` | Lista de denegación (`DEFAULT_SECRET_DENYLIST`, configurable): el worktree no recibe los versionados (`skip-worktree`), solo se copia un `.env*` declarado por su nombre en `copy`/`.worktreeinclude` (nunca `.env.production`, llaves ni `~/.ssh`) y un diff que los toca es riesgo alto que exige humano | SEC-17, SEC-08 |
 
 ## 4. Riesgos residuales aceptados
 | Riesgo | Por qué se acepta | Revisión |

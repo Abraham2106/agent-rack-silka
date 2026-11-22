@@ -14,4 +14,4 @@
 
 - [x] 3.1 `run`, `stop` y `archive` con cierre del árbol de procesos antes de borrar, y verificar en Windows con un servidor vivo (WR-04); correr también `npm run e2e:worktree`
 - [x] 3.2 `runMode: exclusive` y verificar con una prueba (WR-05)
-- [ ] 3.3 `silka.workspace.*` en Code Mode y en la CLI, documentado, y verificar que el ejemplo del README corre
+- [x] 3.3 `silka.workspace.*` en Code Mode y en la CLI, documentado, y verificar que el ejemplo del README corre

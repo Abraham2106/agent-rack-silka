@@ -54,7 +54,23 @@ function unversionedFiles(repoRoot) {
  * Un patrón sin comodines es una ruta literal; con comodines se casa con los archivos no versionados
  * (misma sintaxis que la lista de denegación). Lo que la lista de secretos deniegue NO se copia, y
  * se devuelve en `skipped` con el motivo. No sobrescribe lo que ya exista en el worktree.
+ *
+ * Allowlist explícita: una ruta literal (sin comodines) en `copy` o `.worktreeinclude`, p. ej.
+ * `.env.local`, gana sobre el patrón amplio `.env*` de la denegación, pero nunca sobre HARD_DENY, otros
+ * patrones de la lista ni rutas fuera del repo. Los comodines (`.env*`) pasan siempre por la
+ * denegación completa: no abren secretos. Sin entrada explícita no se copia ningún `.env*`.
  */
+/**
+ * Lo que ninguna entrada explícita puede abrir (decisión del usuario): `.env.production`,
+ * `.env.*.production`, llaves privadas, `~/.ssh` y todo lo que quede fuera del repo.
+ */
+export const HARD_DENY = Object.freeze(['.env.production', '.env.*.production', '*.pem', '*.key', 'id_*', '~/.ssh/**']);
+
+/** La denegación aplicable a una entrada explícita: la lista sin su patrón amplio `.env*` y sus `!`. */
+function denylistForExplicit(denylist) {
+  return (denylist || []).filter((p) => p.replace(/^!/, '') !== '.env*');
+}
+
 export function copyWorkspaceFiles(repoRoot, wt, recipe, { denylist = silkaSecretDenylist(), homeDir } = {}) {
   const patterns = [...(recipe?.copy || []), ...readWorktreeInclude(repoRoot)];
   const copied = [];
@@ -78,11 +94,19 @@ export function copyWorkspaceFiles(repoRoot, wt, recipe, { denylist = silkaSecre
     for (const file of candidates) {
       if (seen.has(file)) continue;
       seen.add(file);
-      if (isDeniedPath(file, denylist, { homeDir })) {
+      const src = path.resolve(root, file);
+      const rel = path.relative(root, src);
+      if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
+        skipped.push({ file, reason: 'fuera del repo' });
+        continue;
+      }
+      const denied = isGlob
+        ? isDeniedPath(file, denylist, { homeDir })
+        : isDeniedPath(file, [...denylistForExplicit(denylist), ...HARD_DENY], { homeDir });
+      if (denied) {
         skipped.push({ file, reason: 'denegado por la lista de secretos' });
         continue;
       }
-      const src = path.join(root, file);
       if (!fs.existsSync(src) || !fs.statSync(src).isFile()) {
         skipped.push({ file, reason: 'no existe o no es un archivo' });
         continue;

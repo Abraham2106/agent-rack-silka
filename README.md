@@ -156,8 +156,11 @@ de cada tarea. Sin el archivo, Silka se comporta como antes.
 
 - `ports`: tamaño del rango contiguo de puertos de cada tarea (por defecto 10). `SILKA_PORT` es el primero.
 - `copy` y `.worktreeinclude`: archivos que git no versiona y que se copian al worktree. La lista de
-  denegación de secretos (por defecto `.env*`, salvo `.env.example`) siempre gana: un `.env.local` no se
-  copia aunque aparezca en `copy`.
+  denegación de secretos (por defecto `.env*`, salvo `.env.example`) manda: sin una entrada explícita no se
+  copia ningún `.env*`. Para llevar un `.env.local`, decláralo por su nombre (`"copy": [".env.local"]` o una
+  línea en `.worktreeinclude`); esa entrada explícita gana sobre el patrón `.env*`, pero nunca sobre
+  `.env.production`, `.env.*.production`, `*.pem`, `*.key`, `id_*`, `~/.ssh` ni rutas fuera del repo. Un
+  comodín como `.env*` en `copy` no cuenta como entrada explícita y no abre secretos.
 - Variables `SILKA_PORT`, `SILKA_WORKSPACE_PATH`, `SILKA_ROOT_PATH`, `SILKA_WORKSPACE_NAME`, `SILKA_TASK_ID`
   y `SILKA_DEFAULT_BRANCH` llegan a setup, run, verify, archive y al agente.
 - `runMode: "exclusive"`: como máximo un `run` vivo por repo.
