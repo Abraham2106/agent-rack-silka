@@ -14,4 +14,4 @@
 
 - [x] 3.1 Script `scripts/benchmark/run.mjs` que corre los dos caminos desde el mismo commit y verificar que lo registra en el informe (TB-01)
 - [x] 3.2 Generar el informe en `docs/benchmarks/<fecha>.md` con la tabla, la meta del 70% (cumple/no cumple) y los límites, y verificar con una prueba sobre datos fijos (TB-04, TB-05)
-- [ ] 3.3 Correr el benchmark de verdad una vez y commitear el informe; verificar que el porcentaje sale de datos del proveedor
+- [x] 3.3 Correr el benchmark de verdad una vez y commitear el informe; verificar que el porcentaje sale de datos del proveedor (corrida OpenCode con opencode/hy4-flash-free; la calidad de esa corrida no es válida, ver docs/benchmarks/2026-11-22.md)
