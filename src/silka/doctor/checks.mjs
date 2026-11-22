@@ -10,12 +10,13 @@ import { readProcessStartMs } from '../lock.mjs';
 import { silkaConfigDir, worktreesBase } from '../paths.mjs';
 import { listTaskRepos } from '../tasks/repo-registry.mjs';
 import { readTaskStore } from '../tasks/store.mjs';
+import { detectAgents, entriesFromConfig, findInPath } from '../agents/detect.mjs';
 import { point, STATUS } from './result.mjs';
+
+export { findInPath };
 
 const HUB_RE = /cli\.mjs"?\s+hub\s*$/i;
 const BRIDGE_RE = /cli\.mjs"?\s+bridge\s*$/i;
-/** Agentes que Silka conoce: el binario se busca en los argumentos del shim (p. ej. `shim codex exec`). */
-const KNOWN_AGENT_BINS = ['codex', 'opencode', 'cursor'];
 const LARGE_NOTES_BYTES = 5 * 1024 * 1024;
 const LARGE_LOGS_BYTES = 200 * 1024 * 1024;
 const LARGE_REGISTRY_ENTRIES = 50;
@@ -29,21 +30,6 @@ export function coversPath(allowed, target) {
     const base = norm(w);
     return t === base || t.startsWith(`${base}/`);
   });
-}
-
-/** Busca un ejecutable en el PATH dado (sin lanzarlo). En Windows prueba las extensiones habituales. */
-export function findInPath(name, env = process.env) {
-  const dirs = String(env.PATH || env.Path || '').split(path.delimiter).filter(Boolean);
-  const exts = process.platform === 'win32' ? ['', '.exe', '.cmd', '.ps1'] : [''];
-  for (const dir of dirs) {
-    for (const ext of exts) {
-      const file = path.join(dir, name + ext);
-      try {
-        if (fs.statSync(file).isFile()) return file;
-      } catch { /* no está aquí */ }
-    }
-  }
-  return null;
 }
 
 /** Procesos vivos con su línea de comando. En Windows, PowerShell; en el resto, ps. */
@@ -322,30 +308,20 @@ export function checkAgentClis(ctx) {
     return point({ id: 'agent-clis', name: 'CLIs de agentes', status: STATUS.WARN, cause: 'sin configuración no se pueden revisar las CLI', fix: 'corrige agent-rack.config.json (ver el punto de configuración)' });
   }
   const out = [];
-  for (const [agent, spec] of Object.entries(config.agents ?? {})) {
-    const args = Array.isArray(spec?.args) ? spec.args.map(String) : [];
-    const bin = args.find((a) => KNOWN_AGENT_BINS.includes(a)) || spec?.command;
+  const detected = detectAgents(entriesFromConfig(config.agents), { env: ctx.env, home: ctx.home });
+  for (const { agent, bin, installed, authFile, session } of detected) {
     const id = `cli-${agent}`;
-    if (!bin || !findInPath(bin, ctx.env)) {
+    if (!installed) {
       out.push(point({ id, name: `CLI de ${agent}`, status: STATUS.FAIL, cause: `no se encuentra "${bin ?? '(sin comando)'}" en PATH`, fix: `instala la CLI de ${agent} y abre una terminal nueva` }));
-      continue;
-    }
-    const auth = authFileFor(agent, ctx);
-    if (!auth) {
+    } else if (session === null) {
       out.push(point({ id, name: `CLI de ${agent} instalada`, status: STATUS.WARN, cause: 'no se puede comprobar la sesión desde Silka', fix: `comprueba a mano que ${agent} tiene sesión iniciada` }));
-    } else if (fs.existsSync(auth)) {
+    } else if (session) {
       out.push(point({ id, name: `CLI de ${agent} instalada y con sesión`, status: STATUS.OK }));
     } else {
-      out.push(point({ id, name: `CLI de ${agent} sin sesión`, status: STATUS.FAIL, cause: `no hay credenciales de ${agent} (${auth})`, fix: `inicia sesión en ${agent} desde su terminal` }));
+      out.push(point({ id, name: `CLI de ${agent} sin sesión`, status: STATUS.FAIL, cause: `no hay credenciales de ${agent} (${authFile})`, fix: `inicia sesión en ${agent} desde su terminal` }));
     }
   }
   return out.length ? out : point({ id: 'agent-clis', name: 'CLIs de agentes', status: STATUS.WARN, cause: 'no hay agentes en la configuración', fix: 'añade un agente en agent-rack.config.json' });
-}
-
-function authFileFor(agent, ctx) {
-  if (agent === 'codex') return path.join(ctx.home, '.codex', 'auth.json');
-  if (agent === 'opencode') return path.join(ctx.env.XDG_DATA_HOME || path.join(ctx.home, '.local', 'share'), 'opencode', 'auth.json');
-  return null;
 }
 
 /** Repos del registro: entradas que ya no existen o no tienen tareas. */
