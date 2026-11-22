@@ -13,7 +13,9 @@ hacerlo en Windows, versionado en el repo.
   `copy`, `ports`, `runMode` (`concurrent` o `exclusive`) y `shell` (`pwsh`, `cmd` o `bash`), con variantes por
   sistema.
 - Copia al worktree los archivos que git no versiona según `copy` y `.worktreeinclude`, respetando la lista de
-  denegación de secretos de `agent-containment`.
+  denegación de secretos de `agent-containment`. Es una allowlist explícita: un `.env.local` solo se copia si el
+  repo lo declara por su nombre; un comodín `.env*` no abre secretos, y `.env.production`, llaves privadas, `~/.ssh`
+  y rutas fuera del repo nunca se copian.
 - Rango de puertos por tarea (por defecto 10) y variables de entorno estándar `SILKA_PORT`,
   `SILKA_WORKSPACE_PATH`, `SILKA_ROOT_PATH`, `SILKA_WORKSPACE_NAME`, `SILKA_TASK_ID` y `SILKA_DEFAULT_BRANCH`.
 - `run`, `stop` y `archive` de una tarea, con cierre del árbol de procesos en Windows antes de borrar el worktree.

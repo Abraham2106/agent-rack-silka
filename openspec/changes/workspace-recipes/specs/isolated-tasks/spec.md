@@ -10,12 +10,28 @@ el comportamiento SHALL ser el actual (setup inferido por lockfile).
 - **THEN** en Windows se corre la variante `win` con el shell declarado
 
 ### Requirement: FR-TK-13 Archivos no versionados
-The system SHALL copiar al worktree los archivos indicados en `copy` y en `.worktreeinclude`, y por defecto los
-`.env*`, excepto los que la lista de denegación de secretos excluya.
+The system SHALL copiar al worktree solo los archivos que el repo declara en `copy` (de `silka.json`) o en
+`.worktreeinclude`. Sin una entrada explícita (ruta literal, p. ej. `.env.local`) SHALL NOT copiar ningún `.env*`. Una
+entrada explícita SHALL ganar sobre el patrón `.env*` de la lista de denegación de secretos, pero MUST NOT ganar sobre
+`.env.production`, `.env.*.production`, llaves privadas (`*.pem`, `*.key`, `id_*`), `~/.ssh`, otros patrones de la
+lista ni rutas fuera del repo. Un comodín (p. ej. `.env*`) NO cuenta como entrada explícita y SHALL pasar por la
+lista de denegación completa.
 
-#### Scenario: Copia respetando la denegación (WR-02)
-- **WHEN** `copy` incluye `.env*` y la lista de denegación excluye `.env.production`
-- **THEN** el worktree recibe `.env.local` y no recibe `.env.production`
+#### Scenario: Entrada explícita copia el .env.local (WR-02)
+- **WHEN** `copy` incluye `.env.local` y el archivo existe sin versionar
+- **THEN** el worktree recibe `.env.local`
+
+#### Scenario: Sin entrada explícita no se copia ningún .env (WR-02)
+- **WHEN** el repo no declara ningún `.env*` en `copy` ni en `.worktreeinclude`
+- **THEN** el worktree no recibe ningún `.env*`
+
+#### Scenario: Secretos duros nunca se copian (WR-02)
+- **WHEN** `copy` declara `.env.production`, `.env.eu.production`, `server.pem`, `api.key`, `id_rsa` o `../fuera.txt`
+- **THEN** ninguno se copia y cada uno queda en `skipped` con el motivo
+
+#### Scenario: Un comodín amplio no abre secretos (WR-02)
+- **WHEN** `copy` incluye `.env*` y rige la lista de denegación por defecto
+- **THEN** el worktree no recibe `.env.local` ni `.env.production`
 
 ### Requirement: FR-TK-14 Puertos y entorno por tarea
 The system SHALL reservar para cada tarea un rango contiguo de puertos libres (por defecto 10) bajo lock,
