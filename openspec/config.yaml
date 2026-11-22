@@ -23,7 +23,7 @@ rules:
     - Cada Scenario nombra la prueba que lo cubre entre paréntesis (T-*, HL-*, TP-*, etc.) si existe.
     - Las métricas de los NFR se escriben como escenarios medibles (umbral explícito).
   tasks:
-    - Cada tarea debe poder delegarse sola a un agente con Silka: alcance (archivos), entregable y verify (comando real).
+    - "Cada tarea debe poder delegarse sola a un agente con Silka: alcance (archivos), entregable y verify (comando real)."
     - Indica dependencias entre tareas cuando las haya.
   proposal:
     - Di siempre qué queda fuera de alcance.
