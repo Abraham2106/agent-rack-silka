@@ -14,23 +14,28 @@ test('TP-01 harnessFreeEnv quita el NODE_ENV del TUI y conserva el del usuario',
   assert.equal(harnessFreeEnv(tui).NODE_ENV, undefined, 'el entorno del harness no se filtra a los agentes');
 });
 
-test('TP-02 el escaneo se espacia por estado y por tiempo, sin repetir el git completo', async () => {
+test('TP-02 el escaneo se espacia por estado y por tiempo, sin repetir el git completo', async (t) => {
+  // El intervalo se mide con Date.now. Se usa un reloj simulado que avanzamos a mano, así la
+  // prueba no depende de cuánto tarde el event loop bajo carga. El escaneo "inline" corre en un
+  // setTimeout(0) que se dispara antes que cualquier espera de 0 ms posterior (orden FIFO).
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
   let runs = 0;
   const scanner = createWorkspaceScanner({
     everyMs: 60,
     inline: () => { runs += 1; return { hot: [], board: null, clear: true }; },
   });
   scanner.request({ dirs: [] }, 'a');
-  await tick(15);
+  await tick(0);
   scanner.request({ dirs: [] }, 'a');
-  await tick(15);
+  await tick(0);
   assert.equal(runs, 1, 'mismo estado dentro del intervalo: un solo escaneo');
   scanner.request({ dirs: [] }, 'b');
-  await tick(15);
+  await tick(0);
   assert.equal(runs, 2, 'cambio de estado: escaneo inmediato');
-  await tick(75);
+  now += 60;
   scanner.request({ dirs: [] }, 'b');
-  await tick(15);
+  await tick(0);
   assert.equal(runs, 3, 'vencido el intervalo: se vuelve a escanear aunque no cambiara el estado');
   await scanner.close();
 });

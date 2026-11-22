@@ -5,7 +5,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { listProcesses } from '../src/silka/doctor/checks.mjs';
+import { makeContext } from '../src/silka/doctor/checks.mjs';
+import { diagnose } from '../src/silka/doctor/index.mjs';
+import { STATUS } from '../src/silka/doctor/result.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const doctorDir = path.resolve(here, '../src/silka/doctor');
@@ -40,15 +42,23 @@ test('DR-04a doctor con fallas presentes no cambia archivos de config ni de dato
   assert.deepEqual({ cfg: snapshot(cfg), data: snapshot(data) }, before);
 });
 
-test('DR-04b doctor no mata ni arranca hubs ni bridges', () => {
-  const roles = (procs) => procs.filter((p) => /cli\.mjs"?\s+(hub|bridge)\s*$/i.test(p.commandLine || '')).map((p) => p.pid).sort().join(',');
-  const before = roles(listProcesses());
-  spawnSync(process.execPath, [path.resolve(here, '../src/silka/cli.mjs'), 'doctor'], {
-    encoding: 'utf8',
-    timeout: 60_000,
-    env: { ...process.env, SILKA_CONFIG: path.join(os.tmpdir(), 'no-existe-silka.json') },
-  });
-  assert.equal(roles(listProcesses()), before);
+test('DR-04b doctor no mata ni arranca hubs ni bridges', async (t) => {
+  // Aislado de la máquina: la tabla de procesos es simulada y process.kill se espía. Así el
+  // resultado no depende de los hubs o bridges que otros agentes o sesiones tengan en marcha.
+  // (El arranque y la terminación de procesos en el código de doctor se vigilan en DR-04c.)
+  const cli = path.resolve(here, '../src/silka/cli.mjs');
+  const procs = [
+    { pid: 910001, name: 'node.exe', commandLine: `node "${cli}" hub` },
+    { pid: 910002, name: 'node.exe', commandLine: `node "${cli}" bridge` },
+  ];
+  const before = JSON.stringify(procs);
+  const signals = [];
+  t.mock.method(process, 'kill', (pid, sig) => { signals.push({ pid, sig }); return true; });
+  const ctx = await makeContext({ listProcesses: () => procs, probePort: async () => true });
+  const { points } = await diagnose({ ctx });
+  assert.equal(points.find((p) => p.id === 'hub')?.status, STATUS.OK, 'doctor sí vio el hub simulado');
+  assert.deepEqual(signals, [], 'doctor no envía señales a ningún proceso');
+  assert.equal(JSON.stringify(procs), before, 'doctor no cambia la tabla de procesos');
 });
 
 test('DR-04c el código de doctor no contiene escrituras, borrados ni terminaciones de procesos', () => {
