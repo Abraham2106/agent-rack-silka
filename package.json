@@ -19,7 +19,9 @@
     "spec:validate": "openspec validate --specs --strict",
     "e2e:worktree": "node scripts/e2e-worktree-session.mjs",
     "e2e:contencion": "node scripts/e2e-contencion.mjs",
-    "e2e:ciclo": "node scripts/e2e-task-cycle.mjs"
+    "e2e:ciclo": "node scripts/e2e-task-cycle.mjs",
+    "evals": "node evals/run.mjs",
+    "evals:smoke": "node evals/run.mjs --smoke"
   },
   "repository": {
     "type": "git",

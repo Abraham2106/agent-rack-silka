@@ -1,0 +1,21 @@
+# Ejemplo de puerta de merge: el smoke eval de evals/ bloquea un pull request si la precisión queda
+# bajo el piso (run.mjs sale con 1). Usa el modelo fake: sin red, sin secretos, sin coste.
+# Para exigir la suite completa con el juez real, añadir --juez opencode y un runner con OpenCode.
+name: evals-smoke
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Smoke eval (puerta de merge)
+        run: npm run evals:smoke
