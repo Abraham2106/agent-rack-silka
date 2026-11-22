@@ -14,6 +14,6 @@
 
 - [x] 3.1 `--apply` escribe con `writeAtomic` solo bajo la carpeta de config de Silka, y verificar con una prueba que la config global simulada queda intacta (ST-03)
 - [x] 3.2 Idempotencia y `--json`, y verificar con una prueba de doble ejecución y otra de salida JSON (ST-04, ST-05)
-- [ ] 3.3 Ejecutar `npm test` y `npm run spec:validate`, y verificar que pasan
+- [x] 3.3 Ejecutar `npm test` y `npm run spec:validate`, y verificar que pasan
 
 Verificación real: toca config del hub; correr `npm run e2e:worktree` antes de decir "comprobado".
