@@ -127,6 +127,41 @@ function diffEvidence(diff, task) {
   };
 }
 
+/**
+ * BUG-10: agent-rack tiene un tope de sesiones simultáneas (5 por defecto) que Silka no conoce:
+ * lo descubre al fallar. Antes cada tarea pendiente reintentaba cada ~2 s y llenaba hub.log con la
+ * misma línea. Ahora, al toparse con él, nadie pide sesión durante 30 s, y se avisa una sola vez
+ * hasta que vuelva a haber cupo. Es del proceso (el hub), no de un repo: el tope es de agent-rack.
+ */
+export const SESSION_LIMIT_BACKOFF_MS = 30_000;
+/** Estado de la espera (exportado para pruebas). */
+export const sessionLimit = { until: 0, logged: false };
+
+export function isSessionLimitError(msg) {
+  return /Maximum concurrent sessions/i.test(String(msg || ''));
+}
+
+/** Solo para pruebas: olvida la espera por tope de sesiones. */
+export function resetSessionLimitBackoff() {
+  sessionLimit.until = 0;
+  sessionLimit.logged = false;
+}
+
+function noteSessionLimit(log, msg) {
+  sessionLimit.until = Date.now() + SESSION_LIMIT_BACKOFF_MS;
+  if (sessionLimit.logged) return;
+  sessionLimit.logged = true;
+  log(`[silka] agent-rack no da más sesiones (${msg.replace(/^.*?(Maximum)/i, '$1')}); las tareas pendientes esperan y se reintenta cada ${SESSION_LIMIT_BACKOFF_MS / 1000} s.`);
+}
+
+function noteSessionCapacity(log) {
+  if (!sessionLimit.logged) return;
+  sessionLimit.logged = false;
+  log('[silka] agent-rack vuelve a tener cupo de sesiones.');
+}
+
+const sessionLimitActive = () => Date.now() < sessionLimit.until;
+
 export class TaskManager {
   constructor(workspace, opts = {}) {
     this.workspace = workspace;
@@ -228,6 +263,7 @@ export class TaskManager {
         log(`[silka] ${task.id}: el setup falló; queda en verificacion_fallida.`);
         continue;
       }
+      if (sessionLimitActive()) continue;
       const prompt = agentPrompt(task);
       if (!prompt.trim()) throw silkaError('E_POLICY', `La tarea ${task.id} no tiene prompt.`);
       const payload = {
@@ -264,15 +300,22 @@ export class TaskManager {
         continue;
       }
       started.push(task.id);
+      noteSessionCapacity(log);
       } catch (err) {
         // Una tarea que no arranca no bloquea a las demás; el motivo queda en la tarea.
         const msg = err instanceof Error ? err.message : String(err);
-        log(`[silka] no arrancó ${task.id}: ${msg}`);
-        mutateTaskStore(this.repoRoot, (store) => {
-          const row = store.tasks.find((t) => t.id === task.id);
-          if (row) row.startError = msg.slice(0, 500);
-          return store;
-        });
+        const limit = isSessionLimitError(msg);
+        if (limit) noteSessionLimit(log, msg);
+        const stored = msg.slice(0, 500);
+        // Mismo error que la vez anterior: no se repite en el log (BUG-10).
+        if (!limit && task.startError !== stored) log(`[silka] no arrancó ${task.id}: ${msg}`);
+        if (task.startError !== stored) {
+          mutateTaskStore(this.repoRoot, (store) => {
+            const row = store.tasks.find((t) => t.id === task.id);
+            if (row) row.startError = stored;
+            return store;
+          });
+        }
       }
     }
     return started;
@@ -622,7 +665,7 @@ export class TaskManager {
   }
 
   /** Despacha reparación a la misma sesión (idempotente si el hub reinicia). */
-  async dispatchPendingRepairs({ callHub } = {}) {
+  async dispatchPendingRepairs({ callHub, log = () => {} } = {}) {
     if (!callHub) return 0;
     let n = 0;
     for (const task of this.list()) {
@@ -634,8 +677,17 @@ export class TaskManager {
         this.blockTask(task.id, `worktree ausente o dañado: ${task.worktreePath}`);
         continue;
       }
-      // eslint-disable-next-line no-await-in-loop
-      await callHub('agent_session_send', { sessionId: task.sessionId, message: pr.message });
+      // Reanudar la sesión también cuenta para el tope de agent-rack (BUG-10).
+      if (sessionLimitActive()) continue;
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await callHub('agent_session_send', { sessionId: task.sessionId, message: pr.message });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!isSessionLimitError(msg)) throw err;
+        noteSessionLimit(log, msg);
+        continue;
+      }
       mutateTaskStore(this.repoRoot, (store) => {
         const row = store.tasks.find((t) => t.id === task.id);
         if (!row?.pendingRepair || row.repairDispatchId === pr.id) return store;

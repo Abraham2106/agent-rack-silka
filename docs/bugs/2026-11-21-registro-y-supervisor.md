@@ -263,3 +263,16 @@ En la terminal del panel, un hub sano en un puerto libre se quedó vivo más de 
 - **Prueba real:** con el runtime falso (pid de `explorer.exe`) el hub ahora arranca agent-rack y se queda
   vivo. Con un agent-rack huérfano arrancado directo, `silka hub` lo adopta ("agent-rack ya corría sin hub;
   se adopta"), se queda vivo y, al matar ese agent-rack, se cierra con el motivo en el log.
+
+### BUG-10 · arreglo (fase 1)
+
+- Al toparse con `Maximum concurrent sessions`, el hub deja de pedir sesiones (crear o reanudar para reparar)
+  durante **30 s** y lo avisa **una sola vez** en `hub.log` ("agent-rack no da más sesiones …; se reintenta cada
+  30 s"); cuando vuelve a haber cupo, lo dice ("vuelve a tener cupo"). Las tareas siguen en `planificada`.
+- Cualquier otro error de arranque se anota una vez por tarea (igual que `startError`), no en cada ciclo.
+- No cambia el tope: sigue siendo de agent-rack (`security.maxConcurrentSessions`, 5). Subirlo es decisión del
+  usuario.
+- Pruebas: `test/session-limit.test.mjs`.
+- **Prueba real:** `node scripts/e2e-task-cycle.mjs --escenarios entrega,vacio --max-sesiones 1` (agent-rack real
+  con tope 1, dos tareas): la segunda esperó, un solo aviso de tope en el log, luego "vuelve a tener cupo" y
+  ambas terminaron con su ficha correcta.

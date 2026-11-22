@@ -104,7 +104,7 @@ export async function superviseTasksOnce(client, { repoRoots, defaultAgent = 'co
       }
     }
     // eslint-disable-next-line no-await-in-loop
-    n += await mgr.dispatchPendingRepairs({ callHub });
+    n += await mgr.dispatchPendingRepairs({ callHub, log });
   }
   return n;
 }

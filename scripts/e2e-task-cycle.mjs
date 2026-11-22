@@ -4,7 +4,7 @@
 // agentes son reales (por defecto OpenCode con un modelo gratis) y trabajan en worktrees de la
 // carpeta de Silka. Comprueba la ficha que sale de cada escenario.
 //   node scripts/e2e-task-cycle.mjs [--port 18997] [--agent opencode] [--model opencode/hy4-flash-free]
-//                                   [--escenarios entrega,vacio,lento]
+//                                   [--escenarios entrega,vacio,caida,lento] [--verify-s 25] [--max-sesiones N]
 // Escenarios:
 //   entrega  el agente crea un archivo → ficha pass, con evidencia session + diff + verify.
 //   vacio    el agente no cambia nada (maxRepairs 0) → ficha fail por diff y el verify no se corre (BUG-09).
@@ -23,6 +23,8 @@ const agent = arg('agent', 'opencode');
 const model = arg('model', 'opencode/hy4-flash-free');
 const scenarios = String(arg('escenarios', 'entrega,vacio,caida,lento')).split(',').map((s) => s.trim()).filter(Boolean);
 const slowSeconds = Number(arg('verify-s', 25));
+// --max-sesiones N baja el tope de agent-rack (security.maxConcurrentSessions) para forzar BUG-10.
+const maxSessions = Number(arg('max-sesiones', 0));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Config temporal ANTES de importar Silka: las tareas de prueba no ensucian la config real.
@@ -101,7 +103,8 @@ const failures = [];
 const check = (cond, msg) => { console.log(`${cond ? '  ok ' : '  MAL'} ${msg}`); if (!cond) failures.push(msg); };
 let mgr;
 try {
-  const cfgFile = writeEffectiveAgentRackConfig({ ...config, port }, port);
+  const security = maxSessions > 0 ? { ...(config.security || {}), maxConcurrentSessions: maxSessions } : config.security;
+  const cfgFile = writeEffectiveAgentRackConfig({ ...config, port, ...(security ? { security } : {}) }, port);
   const bin = path.join(root, 'node_modules', 'agent-rack', 'bin', 'agent-rack.js');
   server = spawn(process.execPath, [bin, 'start', '-t', 'sse', '-c', cfgFile], { cwd: root, stdio: ['pipe', 'ignore', 'ignore'] });
   let runtime = null;
@@ -150,6 +153,13 @@ try {
   await stopSupervisor();
   stopSupervisor = async () => {};
 
+  if (maxSessions > 0) {
+    const limitLines = logs.filter((m) => /no da más sesiones|Maximum concurrent sessions/.test(m));
+    console.log(`
+tope de sesiones ${maxSessions}: ${limitLines.length} aviso(s) de tope en el log`);
+    check(limitLines.length === 1, 'tope: se avisa una sola vez');
+    check(limitLines.every((m) => /no da más sesiones/.test(m)), 'tope: sin líneas repetidas de "no arrancó"');
+  }
   for (const s of scenarios) {
     const t = mgr.list().find((x) => x.id === SPECS[s].id);
     const kinds = (t.card?.evidence || []).map((e) => `${e.kind}:${e.ok ? 'ok' : 'falla'}`).join(' ');
