@@ -20,6 +20,7 @@ import { assertVerifyDeclared, runVerifyWithEvidence } from './verify.mjs';
 import { lockfileHash, runSetupWithEvidence, setupForTask } from './setup.mjs';
 import { integrationBlockedReason } from '../integration/runner.mjs';
 import { recordDeliveryMetricIfClosed } from '../metrics/task-close.mjs';
+import { deleteSessionNotes } from '../notes.mjs';
 
 function nowIso() {
   return new Date().toISOString();
@@ -853,6 +854,10 @@ export class TaskManager {
   cleanupTask(taskId) {
     const task = getTask(this.repoRoot, taskId);
     if (!task || task.sessionAlive) return;
+    // Tarea mezclada o descartada: sus notas de sesión ya no sirven (FR-SN-03).
+    if (task.sessionId) {
+      try { deleteSessionNotes(task.sessionId); } catch { /* las notas son volátiles: si falla, el prune las recoge */ }
+    }
     releasePorts(this.repoRoot, taskId);
     if (task.worktreePath) removeTaskWorktree(this.repoRoot, taskId, task.worktreePath);
     mutateTaskStore(this.repoRoot, (store) => {

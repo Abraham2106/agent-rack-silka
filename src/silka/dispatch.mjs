@@ -1,10 +1,18 @@
 import { isBusy } from './format.mjs';
 import { completeDelivery, failDelivery, formatDelivery, listQueue, queuedSessionIds, releaseDelivery, takeForDelivery } from './queue.mjs';
-import { appendNote } from './notes.mjs';
+import { appendNote, migrateLegacyNotes, pruneNotes } from './notes.mjs';
 import { describeNetError, isNotSentError } from './hub-link.mjs';
 
 function warn(sessionId, text) {
   try { appendNote({ sessionId, text, kind: 'entrega-fallida' }); } catch { /* la nota es opcional */ }
+}
+
+/** Migra el archivo global de notas una vez y aplica los volátiles (FR-SN-01, FR-SN-03). Sin lista válida del hub no borra nada. */
+function maintainNotes(list) {
+  if (!Array.isArray(list)) return;
+  const liveSessionIds = list.map((session) => session?.sessionId).filter(Boolean);
+  try { migrateLegacyNotes({ liveSessionIds }); } catch { /* la migración se reintenta en el siguiente ciclo */ }
+  try { pruneNotes({ sessions: list }); } catch { /* los volátiles son best effort */ }
 }
 
 function stillRunning(message) {
@@ -19,6 +27,7 @@ function stillRunning(message) {
 export async function dispatchOnce(client) {
   const list = await client.listSessions();
   const sessions = Array.isArray(list) ? list : [];
+  maintainNotes(list);
   let sent = 0;
   for (const session of sessions) {
     if (!session?.sessionId || session.status === 'cancelled' || isBusy(session.status)) continue;
