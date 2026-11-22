@@ -163,6 +163,70 @@ test('WR-02: con la lista por defecto, .env* queda denegado y .worktreeinclude s
   }
 });
 
+// --- WR-02: allowlist explícita de .env* -----------------------------------------------------
+
+function wtFor(repo, id) {
+  return createTaskWorktree(repo, id, headCommit(repo), { denylist: [] }).worktreePath;
+}
+
+test('WR-02: un .env.local declarado explícitamente se copia con la lista por defecto', () => {
+  const repo = initRepo('.env*\n');
+  fs.writeFileSync(path.join(repo, '.env.local'), 'LOCAL=1\n');
+  const wt = wtFor(repo, 'wr-al1');
+  try {
+    const r = copyWorkspaceFiles(repo, wt, { copy: ['.env.local'] });
+    assert.deepEqual(r.copied, ['.env.local']);
+    assert.ok(fs.existsSync(path.join(wt, '.env.local')));
+  } finally {
+    removeTaskWorktree(repo, 'wr-al1', wt);
+  }
+});
+
+test('WR-02: sin entrada explícita no se copia ningún .env*', () => {
+  const repo = initRepo('.env*\n');
+  fs.writeFileSync(path.join(repo, '.env.local'), 'LOCAL=1\n');
+  const wt = wtFor(repo, 'wr-al2');
+  try {
+    const r = copyWorkspaceFiles(repo, wt, { copy: [] });
+    assert.deepEqual(r.copied, []);
+    assert.ok(!fs.existsSync(path.join(wt, '.env.local')));
+  } finally {
+    removeTaskWorktree(repo, 'wr-al2', wt);
+  }
+});
+
+test('WR-02: .env.production, llaves y rutas fuera del repo nunca se copian aunque estén declaradas', () => {
+  const repo = initRepo('.env*\n*.pem\n*.key\nid_*\n');
+  for (const f of ['.env.production', '.env.eu.production', 'server.pem', 'api.key', 'id_rsa']) {
+    fs.writeFileSync(path.join(repo, f), 'SECRETO\n');
+  }
+  const wt = wtFor(repo, 'wr-al3');
+  try {
+    const declared = ['.env.production', '.env.eu.production', 'server.pem', 'api.key', 'id_rsa', '../fuera.txt'];
+    const r = copyWorkspaceFiles(repo, wt, { copy: declared });
+    assert.deepEqual(r.copied, []);
+    assert.equal(r.skipped.length, declared.length);
+    for (const f of declared.slice(0, 5)) assert.ok(!fs.existsSync(path.join(wt, f)), f);
+  } finally {
+    removeTaskWorktree(repo, 'wr-al3', wt);
+  }
+});
+
+test('WR-02: el glob amplio .env* en copy no abre secretos con la lista por defecto', () => {
+  const repo = initRepo('.env*\n');
+  fs.writeFileSync(path.join(repo, '.env.local'), 'LOCAL=1\n');
+  fs.writeFileSync(path.join(repo, '.env.production'), 'PROD=1\n');
+  const wt = wtFor(repo, 'wr-al4');
+  try {
+    const r = copyWorkspaceFiles(repo, wt, { copy: ['.env*'] });
+    assert.deepEqual(r.copied, []);
+    assert.ok(!fs.existsSync(path.join(wt, '.env.local')));
+    assert.ok(!fs.existsSync(path.join(wt, '.env.production')));
+  } finally {
+    removeTaskWorktree(repo, 'wr-al4', wt);
+  }
+});
+
 // --- WR-03: puertos y variables por tarea --------------------------------------------------
 
 test('WR-03: dos tareas que piden puertos a la vez reciben rangos contiguos sin solaparse', () => {
@@ -214,7 +278,7 @@ test('WR-03: el entorno de la tarea trae SILKA_PORT y las variables estándar', 
 test('WR-03: con receta, el manager copia lo que no es secreto y asigna el rango de puertos', async () => {
   const repo = initRepo('.env*\n');
   writeRecipe(repo, {
-    copy: ['.env.local', '.env.example'],
+    copy: ['.env.local', '.env.example', '.env.production'],
     ports: 3,
     setup: `node -e "require('fs').writeFileSync('setup-env.txt', process.env.SILKA_TASK_ID + ' ' + process.env.SILKA_PORT)"`,
   });
@@ -227,9 +291,10 @@ test('WR-03: con receta, el manager copia lo que no es secreto y asigna el rango
   const row = mgr.list().find((t) => t.id === 'wr-m1');
   try {
     assert.equal(row.allocatedPorts.length, 3, 'rango de la receta');
-    // La lista por defecto deniega .env* (salvo .env.example): un .env.local secreto NO llega al worktree.
-    assert.ok(!fs.existsSync(path.join(row.worktreePath, '.env.local')), 'secreto denegado, no copiado');
+    // Allowlist explícita: el .env.local declarado llega; el .env.production declarado nunca.
+    assert.ok(fs.existsSync(path.join(row.worktreePath, '.env.local')), '.env.local declarado se copia');
     assert.ok(fs.existsSync(path.join(row.worktreePath, '.env.example')), 'lo no secreto sí se copia');
+    assert.ok(!fs.existsSync(path.join(row.worktreePath, '.env.production')), '.env.production jamás');
     assert.ok(mgr.envFor(row).SILKA_PORT, 'SILKA_PORT expuesto');
     assert.equal(mgr.envFor(row).SILKA_TASK_ID, 'wr-m1');
   } finally {
