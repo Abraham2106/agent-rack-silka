@@ -1,0 +1,163 @@
+#!/usr/bin/env node
+// Corre las mismas tareas por dos caminos desde el mismo commit y escribe el informe (TB-01).
+//   node scripts/benchmark/run.mjs --help
+//   node scripts/benchmark/run.mjs --confirmar-gasto     (consume cuota real del proveedor)
+// Sin --confirmar-gasto solo imprime el plan y no llama a ningún proveedor.
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { managerUsageFromClaudeJson } from './usage.mjs';
+import { buildQualityRecord, outOfScopeCount } from './quality.mjs';
+import { buildReport, writeReport } from './report.mjs';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(here, '..', '..');
+export const TASKS_FILE = path.join(here, 'tasks.json');
+export const REPORTS_DIR = path.join(repoRoot, 'docs', 'benchmarks');
+export const SILKA_HINT =
+  'Para esta tarea delega el trabajo de código con la API de Silka (silka_execute) en vez de editar archivos tú mismo. ' +
+  'Resume el resultado en una línea.';
+
+const USAGE = `Uso: node scripts/benchmark/run.mjs [--confirmar-gasto] [--modelo-solo m] [--modelo-silka m]
+
+Corre las tareas de scripts/benchmark/tasks.json por el camino solo y por el camino con Silka,
+desde el commit actual (el árbol debe estar limpio) y escribe docs/benchmarks/<fecha>.md.
+Sin --confirmar-gasto no llama a ningún proveedor: solo muestra el plan.`;
+
+/** Carga y valida el conjunto fijo de tareas. Devuelve también su hash para el informe. */
+export function loadTasks(file = TASKS_FILE) {
+  const raw = fs.readFileSync(file, 'utf8');
+  const data = JSON.parse(raw);
+  const tasks = Array.isArray(data.tasks) ? data.tasks : [];
+  if (tasks.length < 3) throw new Error(`El benchmark exige N >= 3 tareas; hay ${tasks.length}.`);
+  for (const t of tasks) {
+    if (!t.id || !t.verify || !Array.isArray(t.permitidos)) throw new Error(`Tarea incompleta: ${t.id || '(sin id)'}`);
+  }
+  return { tasks, hash: crypto.createHash('sha256').update(raw).digest('hex') };
+}
+
+/**
+ * Corre una tarea por un camino. `runner` devuelve la salida del manager y el resultado del verify.
+ * Las cifras de calidad que el runner no pueda medir quedan en null (sin dato).
+ */
+async function runOne({ path: pathName, task, commit, runner, workdirFor, model }) {
+  const { dir, cleanup } = await workdirFor(pathName, commit, task);
+  try {
+    const out = await runner(task, { workdir: dir, commit, path: pathName });
+    const usage = managerUsageFromClaudeJson(out.stdout);
+    const outOfScope = out.changedFiles ? outOfScopeCount(out.changedFiles, task.permitidos) : null;
+    const { quality, sources } = buildQualityRecord({
+      id: task.id,
+      agent: pathName === 'solo' ? 'manager-solo' : 'manager-silka',
+      model,
+      verify: out.verify,
+      firstPass: out.firstPass,
+      mergeBroke: out.mergeBroke,
+      repairs: out.repairs,
+      outOfScope,
+    });
+    return { taskId: task.id, usage, quality, sources };
+  } finally {
+    await cleanup();
+  }
+}
+
+/**
+ * Corre todas las tareas por ambos caminos. Ambos parten del mismo `commit` y del mismo archivo de tareas.
+ * @param {object} p
+ * @param {string} p.commit
+ * @param {object[]} p.tasks
+ * @param {string} p.tasksHash
+ * @param {{solo: Function, silka: Function}} p.runners  (task, {workdir, commit, path}) => {stdout, verify, firstPass, mergeBroke, repairs, changedFiles}
+ * @param {Function} p.workdirFor  (path, commit, task) => {dir, cleanup}
+ * @param {{solo?: string, silka?: string}} [p.models]
+ * @param {Date} [p.now]
+ */
+export async function runBenchmark({ commit, tasks, tasksHash, runners, workdirFor, models = {}, now = new Date() }) {
+  if (!commit) throw new Error('Falta el commit de partida.');
+  const date = now.toISOString().slice(0, 10);
+  const solo = [];
+  const silka = [];
+  for (const task of tasks) {
+    solo.push(await runOne({ path: 'solo', task, commit, runner: runners.solo, workdirFor, model: models.solo }));
+    silka.push(await runOne({ path: 'silka', task, commit, runner: runners.silka, workdirFor, model: models.silka }));
+  }
+  const markdown = buildReport({ date, commit, tasksHash, models: { solo: models.solo, silka: models.silka }, solo, silka });
+  return { date, commit, solo, silka, markdown };
+}
+
+/** Worktree temporal, detached en el commit, para que cada corrida parta del mismo código. */
+export function gitWorkdir(repo = repoRoot) {
+  return async (pathName, commit, task) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), `silka-bench-${pathName}-${task.id}-`));
+    const add = spawnSync('git', ['worktree', 'add', '--detach', dir, commit], { cwd: repo, encoding: 'utf8' });
+    if (add.status !== 0) throw new Error(`No se pudo crear el worktree: ${add.stderr}`);
+    const cleanup = async () => {
+      spawnSync('git', ['worktree', 'remove', '--force', dir], { cwd: repo, encoding: 'utf8' });
+    };
+    return { dir, cleanup };
+  };
+}
+
+/** Runner real: `claude -p` con salida JSON (uso reportado por el proveedor). */
+export function claudeRunner({ model, silka = false } = {}) {
+  return async (task, { workdir, commit }) => {
+    const prompt = `${task.title}.\nAlcance: ${task.alcance}\nEntregable: ${task.entregable}`;
+    const args = ['-p', '--output-format', 'json'];
+    if (model) args.push('--model', model);
+    if (silka) args.push('--append-system-prompt', SILKA_HINT);
+    const run = spawnSync('claude', args, { cwd: workdir, input: prompt, encoding: 'utf8', shell: true, maxBuffer: 64 * 1024 * 1024 });
+    const check = spawnSync(task.verify, { cwd: workdir, encoding: 'utf8', shell: true });
+    const diff = spawnSync('git', ['diff', '--name-only', commit], { cwd: workdir, encoding: 'utf8' });
+    const changedFiles = diff.status === 0 ? diff.stdout.split(/\r?\n/).filter(Boolean) : null;
+    // La calidad de reparaciones y de roturas al mezclar aún no se registra en este runner: queda en sin dato.
+    return { stdout: run.stdout || '', verify: check.status === 0, firstPass: null, repairs: null, mergeBroke: null, changedFiles };
+  };
+}
+
+function gitClean(cwd) {
+  const r = spawnSync('git', ['status', '--porcelain'], { cwd, encoding: 'utf8' });
+  return r.status === 0 && r.stdout.trim() === '';
+}
+
+function arg(name) {
+  const i = process.argv.indexOf(name);
+  return i >= 0 ? process.argv[i + 1] : undefined;
+}
+
+async function main() {
+  if (process.argv.includes('--help') || process.argv.includes('-h')) {
+    console.log(USAGE);
+    return 0;
+  }
+  const { tasks, hash } = loadTasks();
+  const models = { solo: arg('--modelo-solo'), silka: arg('--modelo-silka') };
+  const commit = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).stdout.trim();
+  if (!process.argv.includes('--confirmar-gasto')) {
+    console.log(`Plan: ${tasks.length} tareas x 2 caminos desde ${commit.slice(0, 12)} (tareas ${hash.slice(0, 12)}).`);
+    console.log('Esto consume cuota real del proveedor. Repite con --confirmar-gasto para correrlo.');
+    return 2;
+  }
+  if (!gitClean(repoRoot)) {
+    console.error('El árbol de trabajo no está limpio: el benchmark debe partir de un commit.');
+    return 1;
+  }
+  const result = await runBenchmark({
+    commit,
+    tasks,
+    tasksHash: hash,
+    models,
+    runners: { solo: claudeRunner({ model: models.solo }), silka: claudeRunner({ model: models.silka, silka: true }) },
+    workdirFor: gitWorkdir(),
+  });
+  const file = writeReport(REPORTS_DIR, result.date, result.markdown);
+  console.log(`Informe: ${file}`);
+  return 0;
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().then((code) => { process.exitCode = code; }, (err) => { console.error(err.message); process.exitCode = 1; });
+}
