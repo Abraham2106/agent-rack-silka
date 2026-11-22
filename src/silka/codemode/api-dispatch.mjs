@@ -107,6 +107,8 @@ export function createApiDispatcher(ctx) {
           defaultAgent: opts.agent,
           defaultModel: opts.model,
           replaceDiscarded: Boolean(opts.replaceDiscarded),
+          // El hub arranca setup y sesión: el bridge no queda bloqueado (BUG-05).
+          deferStart: true,
         });
       }
       const launched = [];

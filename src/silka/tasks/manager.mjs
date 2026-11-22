@@ -89,6 +89,20 @@ function parseHubJson(result) {
   }
 }
 
+/** Aviso al agente cuando su entrega no se pudo mezclar (conflicto, verify sobre main, etc.). */
+function mergeRepairMessage(detail) {
+  const kind = detail?.kind || 'mezcla';
+  const head = kind === 'conflict'
+    ? `Tu entrega choca con lo que ya está en main (archivos: ${(detail.paths || []).join(', ') || '?'}).`
+    : `La mezcla de tu entrega con main falló (${kind}).`;
+  const body = String(detail?.log || detail?.stderr || '').slice(-4000);
+  const how = kind === 'conflict'
+    ? 'Corre `git rebase main` en este directorio, resuelve los conflictos y termina el rebase. No cambies de rama.'
+    : 'Corrige tu trabajo para que pase sobre main y vuelve a entregar. No cambies de rama.';
+  return [head, how, body]
+    .filter(Boolean).join('\n\n');
+}
+
 /** Evidencia de cómo terminó la sesión del agente; null si la tarea no tiene sesión del hub. */
 function sessionEvidence(task) {
   if (!task.sessionId || !task.sessionOutcome) return null;
@@ -204,7 +218,7 @@ export class TaskManager {
    * vieja está descartada y se pide `replace` (`--reemplazar`, `replaceDiscarded`), la vieja se
    * conserva renombrada (`<id>~reemplazada-<n>`, con su historial) y el id queda libre.
    */
-  registerPlan(specs, { cause, replace = false } = {}) {
+  registerPlan(specs, { cause, replace = false, manual = true } = {}) {
     const normalized = specs.map((s) => normalizeTaskInput(s, {
       id: s.id || newTaskId(),
       repoRoot: this.repoRoot,
@@ -233,6 +247,10 @@ export class TaskManager {
         const needsDeps = (spec.dependsOn || []).length > 0;
         const row = {
           ...spec,
+          // Cómo arranca la tarea cuando le toque cupo: 'hub' (el supervisor crea la sesión del
+          // agente) o 'manual' (turno a mano). Antes lo decidía quien llamara a schedule(): la mezcla,
+          // que corre aparte con preferManual, pasaba las tareas en espera a trabajando sin agente.
+          startMode: manual ? 'manual' : 'hub',
           state: needsDeps ? STATES.ESPERANDO_DEPS : STATES.PLANIFICADA,
           version: 1,
           transitions: [{ at: nowIso(), from: null, to: needsDeps ? STATES.ESPERANDO_DEPS : STATES.PLANIFICADA, cause: cause || 'plan' }],
@@ -265,11 +283,15 @@ export class TaskManager {
   async launch(specs, opts = {}) {
     const manual = opts.manual ?? !opts.callHub;
     this.preferManual = manual;
-    const rows = this.registerPlan(specs, { cause: opts.cause || 'launch', replace: Boolean(opts.replaceDiscarded) });
+    const rows = this.registerPlan(specs, { cause: opts.cause || 'launch', replace: Boolean(opts.replaceDiscarded), manual });
     try { registerTaskRepo(this.repoRoot); } catch { /* el registro no frena el lanzamiento */ }
     this.schedule({ manual });
     this.warnDiskIfNeeded();
-    if (opts.callHub) await this.startPendingSessions(opts);
+    // BUG-05: con `deferStart` (el bridge y `silka task run`, que hablan con un hub vivo) el launch
+    // solo registra y crea los worktrees; el setup y la sesión del agente los hace el supervisor del
+    // hub (en proceso aparte). Antes el bridge los hacía aquí, síncronos y entre llamadas al hub: con
+    // setup lento se cortaba su conexión (ECONNRESET, reproducido con un solo hub).
+    if (opts.callHub && !opts.deferStart) await this.startPendingSessions(opts);
     return rows.map((t) => launchPayload(getTask(this.repoRoot, t.id) || t));
   }
 
@@ -508,7 +530,7 @@ export class TaskManager {
         const waiting = task.state === STATES.ESPERANDO_DEPS || task.state === STATES.PLANIFICADA;
         if (!waiting) continue;
         if ((task.dependsOn || []).length && !depsMerged(store, task)) continue;
-        pickList.push({ id: task.id, ports: task.ports });
+        pickList.push({ id: task.id, ports: task.ports, manual: task.startMode ? task.startMode === 'manual' : manual });
       }
       return store;
     });
@@ -524,7 +546,7 @@ export class TaskManager {
         task.worktreePath = wt.worktreePath;
         task.branch = wt.branch;
         task.allocatedPorts = ports;
-        if (manual) {
+        if (pick.manual) {
           recordTransition(task, STATES.TRABAJANDO, 'inicio_worktree');
         } else {
           task.awaitingHubSession = true;
@@ -812,6 +834,14 @@ export class TaskManager {
       if (!row || row.state !== STATES.COLA_MEZCLA) return store;
       row.mergeFailure = detail;
       recordTransition(row, STATES.REPARANDO, 'mezcla_falló');
+      // La mezcla corre en un proceso aparte sin conexión al hub: en vez de mandarle el aviso al
+      // agente desde ahí, queda como reparación pendiente y el supervisor de tareas la despacha
+      // (manda el mensaje y la tarea vuelve a trabajando; al terminar se verifica de nuevo).
+      const maxRepairs = Number.isInteger(row.maxRepairs) ? row.maxRepairs : 2;
+      const repairs = Number(row.repairCount) || 0;
+      if (row.sessionId && repairs < maxRepairs) {
+        row.pendingRepair = { id: `${row.id}-merge-${repairs + 1}`, message: mergeRepairMessage(detail) };
+      }
       return store;
     });
     return getTask(this.repoRoot, taskId);

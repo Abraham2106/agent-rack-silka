@@ -3,7 +3,7 @@
 // (sin node_modules); agente con modelo inexistente (las sesiones terminan solas en segundos).
 // Usar SIEMPRE contra un hub de prueba (otro puerto y config temporal), no el hub real:
 //   SILKA_CONFIG=<config con otro "port"> SILKA_CONFIG_DIR=<carpeta temporal> node scripts/repro-bug05.mjs [N] [--setup-s S]
-// Con --setup-s 8 (setup lento dentro del launch) se reprodujo ECONNRESET con un solo hub.
+// Con --setup-s 8 --como-antes (setup lento dentro del launch) se reprodujo ECONNRESET con un solo hub.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -35,7 +35,8 @@ let error = null; let mgr; const t0 = Date.now();
 try {
   await withClient(async (client) => {
     mgr = createTaskManager(repo, { maxConcurrentTasks: n, preferManual: false });
-    await mgr.launch(tasks, { cause: 'bug05', callHub: createHubCallAdapter(client), manual: false });
+    // Como el bridge actual (deferStart: el hub hace setup y sesiones); --como-antes repite el launch viejo.
+    await mgr.launch(tasks, { cause: 'bug05', callHub: createHubCallAdapter(client), manual: false, deferStart: !process.argv.includes('--como-antes') });
   }, { onState: (s) => states.push(s) });
 } catch (err) { error = err; }
 clearInterval(lag);

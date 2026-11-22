@@ -18,6 +18,7 @@ export async function taskRunFromFile(planFile, opts = {}) {
     defaultAgent: opts.defaultAgent,
     defaultModel: opts.defaultModel,
     replaceDiscarded: opts.replaceDiscarded,
+    deferStart: Boolean(opts.callHub),
   });
   console.log(JSON.stringify({ launched }, null, 2));
   return launched;

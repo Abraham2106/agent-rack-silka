@@ -35,10 +35,8 @@ function formatMergeError(kind, detail) {
   return { kind, ...detail };
 }
 
-async function sendRepairMessage(callHub, task, text) {
-  if (!callHub || !task?.sessionId || !text) return;
-  await callHub('agent_session_send', { sessionId: task.sessionId, message: text });
-}
+// El aviso al agente tras una mezcla fallida ya no se manda desde aquí: failMerge deja una
+// reparación pendiente que despacha el supervisor de tareas (la mezcla corre en otro proceso).
 
 function noteMergeBroken(repoRoot, taskId, verify = null) {
   recordMergeMetricForTask(repoRoot, taskId, { mergeBroke: true, verify });
@@ -107,10 +105,8 @@ export async function mergeOneTask(repoRoot, taskId, { fencingToken, callHub, ve
       stderr: rebase.stderr,
       stdout: rebase.stdout,
     });
-    const text = JSON.stringify(detail, null, 2);
     mgr.failMerge(taskId, detail, { callHub });
     noteMergeBroken(repoRoot, taskId);
-    await sendRepairMessage(callHub, getTask(repoRoot, taskId), text);
     return { repaired: true, detail };
   }
 
@@ -145,7 +141,6 @@ export async function mergeOneTask(repoRoot, taskId, { fencingToken, callHub, ve
     const detail = formatMergeError('verify', { log });
     mgr.failMerge(taskId, detail, { callHub });
     noteMergeBroken(repoRoot, taskId, false);
-    await sendRepairMessage(callHub, getTask(repoRoot, taskId), log);
     return { repaired: true, detail };
   }
 

@@ -316,3 +316,63 @@ estaba descartada ni qué hacer (por eso los relanzamientos usaron `-2`, `-3`).
   limpian restos de su worktree o rama.
 - Pruebas: `test/task-ids.test.mjs`. Prueba real: `e2e:ciclo --escenarios entrega` y `e2e:worktree` OK después
   del cambio (no ejercitan el reemplazo en sí; el reemplazo solo se probó con pruebas automáticas).
+
+## Prueba real hasta la mezcla, con Codex y Cursor (después de la fase 1)
+
+`npm run e2e:ciclo` ahora sigue hasta el final: las fichas que pasan se **aprueban como humano** (el mismo
+servicio que la bandeja) y el **supervisor de mezcla real** las mezcla a `main`. Se agregaron escenarios con
+**Codex** (`gpt-6.1-sol`) y **Cursor**, y un **choque**: dos tareas crean el mismo archivo y la segunda debe
+chocar al mezclar, recibir el aviso, resolver y mezclarse. Lo que salió:
+
+### La mezcla corría dentro del hub y lo congelaba (como BUG-11)
+
+**Síntoma:** con una tarea de verify de 25 s, la mezcla dejó el proceso del hub quieto **27,3 s** (rebase, setup
+y verify sobre main con `spawnSync` en el ciclo del supervisor de mezcla) y se cayó su conexión
+(`Connection closed`). Además, ese supervisor se tragaba sus errores (`catch {}`, como BUG-03).
+
+**Arreglo:** el supervisor de mezcla del hub lanza la mezcla en el mismo proceso aparte que setup y verify
+(`job-worker.mjs merge`), de a una por repo, y la integración de oleada que quedó "en curso" también
+(`job-worker.mjs integration`), sin correrla a la vez que una mezcla. Sus errores van a `hub.log` (una vez).
+Prueba real: pausa máxima **77 ms** durante la mezcla de 4 tareas. Pruebas: `test/merge-jobs.test.mjs`.
+
+### Tras un choque, el agente nunca se enteraba bien y la tarea quedaba en `reparando`
+
+La mezcla mandaba el aviso con `callHub` directo y dejaba la tarea en `reparando` sin reparación pendiente: el
+supervisor de tareas no la volvía a tomar. Ahora `failMerge` deja una reparación pendiente (si hay sesión y le
+quedan reparaciones) con un mensaje claro (para un choque: los archivos y "corre `git rebase main` …"); el
+supervisor de tareas la despacha, la tarea vuelve a `trabajando` y al terminar se verifica de nuevo. Sin sesión,
+queda en `reparando` y decide el humano.
+
+**Prueba real (choque, Codex):** `choque-a` se mezcló; `choque-b` chocó (`conflict` en `choque.txt`), Codex
+recibió el aviso, hizo `git rebase main`, resolvió (`a` + `b`), pasó el verify, volvió a revisión, se aprobó otra
+vez y se mezcló. `main` quedó con los dos commits de entrega.
+
+### Las tareas en espera de cupo no avanzaban (y la mezcla las habría arrancado sin agente)
+
+**Síntoma:** con tope de 4 y 6 tareas, las 2 últimas quedaron en `planificada`: solo se programaba la cola al
+mezclar o al lanzar. Y la mezcla, que corre con `preferManual`, las habría pasado a `trabajando` **sin sesión
+del agente**.
+
+**Arreglo:** el supervisor de tareas programa la cola en cada ciclo (una tarea que pasa a revisión libera cupo).
+Cada tarea guarda cómo arranca (`startMode`: `hub` o `manual`) y `schedule()` respeta eso, la llame quien la
+llame. Pruebas: `test/task-queue.test.mjs`.
+
+### Aviso de "tope suave de worktrees" en cada ciclo
+
+Se repetía cada 400 ms (70 líneas en una corrida) y contaba como exceso las tareas aprobadas o en cola de mezcla,
+que conservan su worktree a propósito. Ahora se avisa una vez por situación y esas no cuentan.
+
+### Cursor sin cuota con su modelo por defecto
+
+La sesión de Cursor terminó `failed`: "You're out of usage. Switch to Auto". Silka lo detectó bien (BUG-09). Con el
+modelo `auto` funciona; el e2e lo usa por defecto (`--modelo-cursor`). Es de la cuenta, no de Silka.
+
+### BUG-05: el launch del bridge ya no hace setup ni crea sesiones
+
+Con hub (`silka_execute` en el bridge, `silka task run`, `scripts/silka-launch.mjs`) el `launch` solo registra
+las tareas y crea sus worktrees; el setup y la sesión del agente los hace el supervisor del hub en proceso aparte.
+Durante el lanzamiento el bridge no llama al hub, así que no hay conexión que se corte. `silka.launch` con
+`isolate: 'worktree'` devuelve las tareas en `planificada`, sin `sessionId` (el hub las arranca en segundos).
+Prueba: `node scripts/repro-bug05.mjs 5 --setup-s 8` (el caso que antes dio `ECONNRESET` en 3 de 5): sin error y
+pausa máxima del proceso 25 ms; `--como-antes` repite el launch viejo. **No probado por MCP real:** el bridge de
+esta sesión tenía código anterior; la prueba llama a la misma función `launch` que usa el bridge.

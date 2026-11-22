@@ -39,13 +39,22 @@ export function createJobRunner({ log = () => {}, maxMs = JOB_MAX_MS, workerPath
     return storedJobAlive(task.job);
   }
 
-  function start(kind, repoRoot, taskId) {
-    const key = keyOf(repoRoot, taskId);
+  /** ¿Hay en curso un trabajo con esta clave? (p. ej. la mezcla de un repo, de a una por repo) */
+  function busyKey(key) {
+    return running.has(key);
+  }
+
+  /**
+   * Lanza `job-worker.mjs <kind> <repoRoot> <taskId> ...args`. `key` agrupa trabajos que no pueden
+   * correr a la vez (por defecto, uno por tarea).
+   */
+  function start(kind, repoRoot, taskId, { key: customKey, args = [] } = {}) {
+    const key = customKey || keyOf(repoRoot, taskId);
     if (running.has(key)) return false;
     const n = (attempts.get(`${key}|${kind}`) || 0) + 1;
     if (n > MAX_ATTEMPTS) return false;
     attempts.set(`${key}|${kind}`, n);
-    const child = spawn(process.execPath, [workerPath, kind, repoRoot, taskId], {
+    const child = spawn(process.execPath, [workerPath, kind, repoRoot, taskId, ...args.map(String)], {
       cwd: repoRoot,
       stdio: ['ignore', 'ignore', 'pipe'],
       windowsHide: true,
@@ -79,6 +88,7 @@ export function createJobRunner({ log = () => {}, maxMs = JOB_MAX_MS, workerPath
 
   return {
     busy,
+    busyKey,
     start,
     get size() { return running.size; },
     /** Espera a que terminen los trabajos en curso (pruebas y cierre ordenado). */

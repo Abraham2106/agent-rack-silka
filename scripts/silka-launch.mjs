@@ -20,7 +20,8 @@ const tasks = JSON.parse(fs.readFileSync(file, 'utf8'))
 await ensureHub();
 await withClient(async (client) => {
   const mgr = createTaskManager(process.cwd(), { maxConcurrentTasks: max, preferManual: false });
-  await mgr.launch(tasks, { cause: 'cli', callHub: createHubCallAdapter(client), manual: false });
+  // El hub hace setup y crea las sesiones (BUG-05): aquí solo se registran y se crean los worktrees.
+  await mgr.launch(tasks, { cause: 'cli', callHub: createHubCallAdapter(client), manual: false, deferStart: true });
   const local = process.env.LOCALAPPDATA || '';
   for (const t of mgr.list().filter((x) => tasks.some((y) => y.id === x.id))) {
     const wt = t.worktreePath ? t.worktreePath.replace(local, '%LOCALAPPDATA%') : '-';

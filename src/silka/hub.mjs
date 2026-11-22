@@ -318,6 +318,7 @@ export async function startHub() {
   const stopMerge = startMergeSupervisor({
     readRuntime: () => readRuntime(status.port),
     connect: connectHub,
+    log: hubLog,
   });
   const onSignal = (stop) => {
     process.once('SIGINT', stop);

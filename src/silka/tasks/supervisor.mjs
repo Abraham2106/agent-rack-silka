@@ -63,6 +63,10 @@ export async function superviseTasksOnce(client, { repoRoots, defaultAgent = 'co
     let mgr;
     try {
       mgr = createTaskManager(repoRoot);
+      // Tareas en espera de cupo: antes solo avanzaban al mezclar otra (o con otro launch); una
+      // tarea que pasaba a revisión liberaba cupo y nadie lo aprovechaba. schedule() no hace nada
+      // si no hay cupo o no hay tareas en espera.
+      mgr.schedule({ manual: false });
       mgr.warnDiskIfNeeded();
       // eslint-disable-next-line no-await-in-loop
       const started = await mgr.startPendingSessions({ callHub, defaultAgent, defaultModel, log, jobs });

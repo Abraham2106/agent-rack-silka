@@ -200,6 +200,8 @@ export interface Silka {
 
   /**
    * Lanza una o varias tareas en el hub (sesiones en segundo plano).
+   * Con `isolate: 'worktree'` devuelve las tareas recién creadas (estado `planificada`, con su
+   * worktree y sin `sessionId` aún): el hub prepara el worktree y arranca al agente en segundos.
    */
   launch(planOrTask: TaskSpec | TaskSpec[], opts?: LaunchOptions): Promise<SessionCard | SessionCard[]>;
 

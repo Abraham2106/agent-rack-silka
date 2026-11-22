@@ -207,7 +207,16 @@ test('verify log por referencia y Code Mode card/plan', async () => {
   assert.equal(plan.length, 1);
   const launched = await dispatch(['launch'], [plan, { isolate: 'worktree', workspace: repo }]);
   const id = launched[0].id;
+  // BUG-05: el launch del bridge no arranca la sesión; queda planificada con su worktree y la
+  // arranca el supervisor del hub (aquí, a mano con el mismo callHub falso).
+  assert.equal(launched[0].state, STATES.PLANIFICADA);
+  assert.equal(launched[0].sessionId, null);
+  assert.ok(fs.existsSync(launched[0].worktreePath));
   const mgr = createTaskManager(repo);
+  await mgr.startPendingSessions({
+    callHub: async () => ({ content: [{ type: 'text', text: JSON.stringify({ sessionId: 'sess-api', status: 'running' }) }] }),
+  });
+  assert.equal(mgr.list().find((t) => t.id === id).sessionId, 'sess-api');
   await mgr.runAgentTurn(id, async (cwd) => {
     fs.mkdirSync(path.join(cwd, 'src'), { recursive: true });
     fs.writeFileSync(path.join(cwd, 'src', 'one.txt'), '1');
