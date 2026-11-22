@@ -9,9 +9,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { managerUsageFromClaudeJson } from './usage.mjs';
+import { managerUsageFromClaudeJson, opencodeUsageFromJsonl } from './usage.mjs';
 import { buildQualityRecord, outOfScopeCount } from './quality.mjs';
-import { buildReport, writeReport } from './report.mjs';
+import { LIMITS, buildReport, writeReport } from './report.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..');
@@ -21,10 +21,31 @@ export const SILKA_HINT =
   'Para esta tarea delega el trabajo de código con la API de Silka (silka_execute) en vez de editar archivos tú mismo. ' +
   'Resume el resultado en una línea.';
 
-const USAGE = `Uso: node scripts/benchmark/run.mjs [--confirmar-gasto] [--modelo-solo m] [--modelo-silka m]
+/** Instrucción del camino con Silka cuando el manager es OpenCode: usa silka_execute (MCP agent-rack). */
+export function opencodeSilkaHint(workspace, model) {
+  return (
+    `Para esta tarea NO edites archivos tú mismo: delega con la herramienta silka_execute (servidor MCP agent-rack). ` +
+    `Lee src/silka/codemode/silka.d.ts para la API. En el código llama a silka.launch({ title, scope, verify, agent: 'opencode', ` +
+    `model: '${model}', prompt, workspace: '${workspace}' }) y luego silka.waitAll([...]). Resume el resultado en una línea.`
+  );
+}
+
+/** Límites extra del informe que dependen de la corrida (no del código): Silka realmente usado, o no. */
+export function silkaCallsLimit(silkaResults) {
+  const counted = silkaResults.filter((r) => r.silkaCalls != null);
+  if (counted.length === 0) return [];
+  const without = counted.filter((r) => r.silkaCalls === 0).length;
+  if (without === 0) return [];
+  return [
+    `${without} de ${counted.length} tareas del camino con Silka no llamaron a silka_execute: esas cifras no son de un camino delegado con Silka.`,
+  ];
+}
+
+const USAGE = `Uso: node scripts/benchmark/run.mjs [--confirmar-gasto] [--proveedor claude|opencode] [--modelo-solo m] [--modelo-silka m]
 
 Corre las tareas de scripts/benchmark/tasks.json por el camino solo y por el camino con Silka,
 desde el commit actual (el árbol debe estar limpio) y escribe docs/benchmarks/<fecha>.md.
+--proveedor opencode usa \`opencode run --format json\` (modelos en formato proveedor/modelo).
 Sin --confirmar-gasto no llama a ningún proveedor: solo muestra el plan.`;
 
 /** Carga y valida el conjunto fijo de tareas. Devuelve también su hash para el informe. */
@@ -47,7 +68,8 @@ async function runOne({ path: pathName, task, commit, runner, workdirFor, model 
   const { dir, cleanup } = await workdirFor(pathName, commit, task);
   try {
     const out = await runner(task, { workdir: dir, commit, path: pathName });
-    const usage = managerUsageFromClaudeJson(out.stdout);
+    // Cada runner puede traer su propio uso (OpenCode); si no, se lee el JSON de `claude -p`.
+    const usage = out.usage ?? managerUsageFromClaudeJson(out.stdout);
     const outOfScope = out.changedFiles ? outOfScopeCount(out.changedFiles, task.permitidos) : null;
     const { quality, sources } = buildQualityRecord({
       id: task.id,
@@ -59,7 +81,7 @@ async function runOne({ path: pathName, task, commit, runner, workdirFor, model 
       repairs: out.repairs,
       outOfScope,
     });
-    return { taskId: task.id, usage, quality, sources };
+    return { taskId: task.id, usage, quality, sources, silkaCalls: out.silkaCalls ?? null };
   } finally {
     await cleanup();
   }
@@ -75,8 +97,9 @@ async function runOne({ path: pathName, task, commit, runner, workdirFor, model 
  * @param {Function} p.workdirFor  (path, commit, task) => {dir, cleanup}
  * @param {{solo?: string, silka?: string}} [p.models]
  * @param {Date} [p.now]
+ * @param {string[]} [p.extraLimits] límites propios de la corrida (p. ej. proveedor sin aislar)
  */
-export async function runBenchmark({ commit, tasks, tasksHash, runners, workdirFor, models = {}, now = new Date() }) {
+export async function runBenchmark({ commit, tasks, tasksHash, runners, workdirFor, models = {}, now = new Date(), extraLimits = [] }) {
   if (!commit) throw new Error('Falta el commit de partida.');
   const date = now.toISOString().slice(0, 10);
   const solo = [];
@@ -85,7 +108,8 @@ export async function runBenchmark({ commit, tasks, tasksHash, runners, workdirF
     solo.push(await runOne({ path: 'solo', task, commit, runner: runners.solo, workdirFor, model: models.solo }));
     silka.push(await runOne({ path: 'silka', task, commit, runner: runners.silka, workdirFor, model: models.silka }));
   }
-  const markdown = buildReport({ date, commit, tasksHash, models: { solo: models.solo, silka: models.silka }, solo, silka });
+  const limits = [...LIMITS, ...extraLimits, ...silkaCallsLimit(silka)];
+  const markdown = buildReport({ date, commit, tasksHash, models: { solo: models.solo, silka: models.silka }, solo, silka, limits });
   return { date, commit, solo, silka, markdown };
 }
 
@@ -118,6 +142,53 @@ export function claudeRunner({ model, silka = false } = {}) {
   };
 }
 
+/** Cuenta las llamadas distintas a silka_execute en el flujo de `opencode run --format json`. */
+export function countSilkaCalls(stdout) {
+  const ids = new Set();
+  for (const line of String(stdout ?? '').split(/\r?\n/)) {
+    if (!line.trim().startsWith('{') || !line.includes('silka_execute')) continue;
+    try {
+      const event = JSON.parse(line);
+      if (event.type === 'tool_use' && /silka_execute/.test(JSON.stringify(event.part ?? {}))) {
+        ids.add(event.part?.id ?? ids.size);
+      }
+    } catch {
+      // línea que no es JSON: no cuenta
+    }
+  }
+  return ids.size;
+}
+
+/**
+ * Runner de OpenCode: `opencode run --format json` con el modelo dado. El uso sale de los eventos
+ * step_finish del proveedor (opencodeUsageFromJsonl); nunca se estima. En el camino con Silka se
+ * cuentan las llamadas a silka_execute: si son cero, esa corrida no usó Silka.
+ */
+export function opencodeRunner({ model, silka = false } = {}) {
+  return async (task, { workdir, commit }) => {
+    const base = `${task.title}. Alcance: ${task.alcance} Entregable: ${task.entregable}`;
+    const prompt = silka ? `${base} ${opencodeSilkaHint(workdir, model)}` : base;
+    // Una sola línea y comillas escapadas: el prompt viaja como argumento de la shell.
+    const line = prompt.replace(/\s+/g, ' ').replace(/"/g, '\\"');
+    const cmd = `opencode run --format json --auto --standalone --title "bench-${task.id}-${silka ? 'silka' : 'solo'}" -m ${model} "${line}"`;
+    const run = spawnSync(cmd, { cwd: workdir, encoding: 'utf8', shell: true, maxBuffer: 64 * 1024 * 1024, timeout: 900000 });
+    const check = spawnSync(task.verify, { cwd: workdir, encoding: 'utf8', shell: true });
+    const diff = spawnSync('git', ['diff', '--name-only', commit], { cwd: workdir, encoding: 'utf8' });
+    const changedFiles = diff.status === 0 ? diff.stdout.split(/\r?\n/).filter(Boolean) : null;
+    const stdout = run.stdout || '';
+    return {
+      stdout,
+      usage: opencodeUsageFromJsonl(stdout),
+      silkaCalls: silka ? countSilkaCalls(stdout) : 0,
+      verify: check.status === 0,
+      firstPass: null,
+      repairs: null,
+      mergeBroke: null,
+      changedFiles,
+    };
+  };
+}
+
 function gitClean(cwd) {
   const r = spawnSync('git', ['status', '--porcelain'], { cwd, encoding: 'utf8' });
   return r.status === 0 && r.stdout.trim() === '';
@@ -135,23 +206,42 @@ async function main() {
   }
   const { tasks, hash } = loadTasks();
   const models = { solo: arg('--modelo-solo'), silka: arg('--modelo-silka') };
+  const proveedor = arg('--proveedor') ?? 'claude';
+  if (proveedor !== 'claude' && proveedor !== 'opencode') {
+    console.error(`--proveedor debe ser claude u opencode; llegó "${proveedor}".`);
+    return 1;
+  }
   const commit = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).stdout.trim();
   if (!process.argv.includes('--confirmar-gasto')) {
     console.log(`Plan: ${tasks.length} tareas x 2 caminos desde ${commit.slice(0, 12)} (tareas ${hash.slice(0, 12)}).`);
-    console.log('Esto consume cuota real del proveedor. Repite con --confirmar-gasto para correrlo.');
+    console.log(`Proveedor: ${proveedor}. Esto consume cuota real del proveedor. Repite con --confirmar-gasto para correrlo.`);
     return 2;
+  }
+  if (proveedor === 'opencode' && (!models.solo || !models.silka)) {
+    console.error('Con --proveedor opencode hay que fijar --modelo-solo y --modelo-silka (proveedor/modelo).');
+    return 1;
   }
   if (!gitClean(repoRoot)) {
     console.error('El árbol de trabajo no está limpio: el benchmark debe partir de un commit.');
     return 1;
   }
+  // Solo OpenCode: el camino solo no puede aislarse del MCP agent-rack (config global), así que se declara.
+  const extraLimits =
+    proveedor === 'opencode'
+      ? ['Con OpenCode, el camino solo corre con el MCP agent-rack de la config global de OpenCode conectado: sus definiciones de herramientas entran en el contexto de ambos caminos. No se aisló porque eso exige cambiar la config del usuario.']
+      : [];
+  const runners =
+    proveedor === 'opencode'
+      ? { solo: opencodeRunner({ model: models.solo }), silka: opencodeRunner({ model: models.silka, silka: true }) }
+      : { solo: claudeRunner({ model: models.solo }), silka: claudeRunner({ model: models.silka, silka: true }) };
   const result = await runBenchmark({
     commit,
     tasks,
     tasksHash: hash,
     models,
-    runners: { solo: claudeRunner({ model: models.solo }), silka: claudeRunner({ model: models.silka, silka: true }) },
+    runners,
     workdirFor: gitWorkdir(),
+    extraLimits,
   });
   const file = writeReport(REPORTS_DIR, result.date, result.markdown);
   console.log(`Informe: ${file}`);
