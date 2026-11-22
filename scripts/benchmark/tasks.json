@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "description": "Tareas fijas del benchmark de tokens (openspec token-benchmark). Mismas instrucciones para el camino solo y el camino con Silka. Cambiarlas invalida la comparación con informes anteriores.",
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "Caso de texto vacío para la estimación de tokens",
+      "alcance": "src/silka/metrics/tokens.mjs: estimateTokensFromText('') debe devolver tokensIn 0 con fuente 'estimacion:chars/4'.",
+      "entregable": "Un caso nuevo en test/metrics.test.mjs que cubra el texto vacío.",
+      "permitidos": ["src/silka/metrics/tokens.mjs", "test/metrics.test.mjs"],
+      "verify": "node --test test/metrics.test.mjs"
+    },
+    {
+      "id": "T2",
+      "title": "Contar muestras sin tokens en las estadísticas de agentes",
+      "alcance": "src/silka/metrics/stats.mjs: aggregateAgentStats devuelve samplesWithoutTokens (filas con tokensIn nulo) sin cambiar los demás campos.",
+      "entregable": "Un caso nuevo en test/metrics.test.mjs con filas de prueba con y sin tokensIn.",
+      "permitidos": ["src/silka/metrics/stats.mjs", "test/metrics.test.mjs"],
+      "verify": "node --test test/metrics.test.mjs"
+    },
+    {
+      "id": "T3",
+      "title": "Caso de texto vacío para charTokens",
+      "alcance": "src/silka/codemode/token-metrics.mjs: charTokens(undefined) y charTokens('') devuelven 0.",
+      "entregable": "Un caso nuevo en test/codemode.test.mjs que cubra ambos valores.",
+      "permitidos": ["src/silka/codemode/token-metrics.mjs", "test/codemode.test.mjs"],
+      "verify": "node --test test/codemode.test.mjs"
+    }
+  ]
+}
