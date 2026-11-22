@@ -100,7 +100,7 @@ npm run silka -- ui
 
 ### Puente entre agentes
 
-Codex, Cursor y OpenCode pueden usar el mismo hub. Un agente lanza a otro y el TUI anida la sesión hija bajo quien la abrió. `SILKA_MAX_DEPTH` (por defecto 2) corta la cadena para que no se deleguen sin fin.
+Codex, Cursor y OpenCode pueden usar el mismo hub. Un agente lanza a otro y el TUI anida la sesión hija bajo quien la abrió. `SILKA_MAX_DEPTH` (por defecto 1, SEC-15) corta la cadena: un agente que Silka lanzó no lanza otros. Con 2, el agente de primer nivel puede delegar una vez y el hijo ya no.
 
 ```bash
 npm run silka -- connect all

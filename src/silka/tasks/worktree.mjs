@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { worktreesBase } from '../paths.mjs';
 import { gitRun } from './git.mjs';
+import { DEFAULT_SECRET_DENYLIST, deniedFiles } from './denylist.mjs';
 import { prepareWorktreeRemoval } from './worktree-cleanup.mjs';
 
 /** Worktree de una tarea, fuera del repo (ver worktreesBase y BUG-06). */
@@ -56,7 +57,24 @@ export function excludeSilkaDir(repoRoot) {
   }
 }
 
-export function createTaskWorktree(repoRoot, taskId, baseCommit) {
+/**
+ * SEC-17: quita del worktree los archivos versionados que casan con la lista de denegación. Git
+ * los marca `skip-worktree`, así que no aparecen como borrados en el diff de la tarea ni se
+ * commitean en la mezcla. Los no versionados (p. ej. `.env` ignorado) ya no llegan al worktree.
+ * Devuelve las rutas ocultadas.
+ */
+export function hideDeniedFiles(wt, patterns = DEFAULT_SECRET_DENYLIST) {
+  const listed = gitRun(wt, ['ls-files', '-z'], { repoRoot: wt });
+  if (!listed.ok) return [];
+  const hidden = deniedFiles(listed.stdout.split('\0').filter(Boolean), patterns);
+  for (const file of hidden) {
+    gitRun(wt, ['update-index', '--skip-worktree', '--', file], { repoRoot: wt });
+    try { fs.rmSync(path.join(wt, file), { force: true }); } catch { /* ya no está */ }
+  }
+  return hidden;
+}
+
+export function createTaskWorktree(repoRoot, taskId, baseCommit, { denylist = DEFAULT_SECRET_DENYLIST } = {}) {
   const wt = worktreePath(repoRoot, taskId);
   const branch = branchName(taskId);
   fs.mkdirSync(path.dirname(wt), { recursive: true });
@@ -66,7 +84,8 @@ export function createTaskWorktree(repoRoot, taskId, baseCommit) {
   const r = gitRun(repoRoot, ['worktree', 'add', '-b', branch, wt, baseCommit], { repoRoot });
   if (!r.ok) throw new Error(r.stderr || r.stdout || 'git worktree add falló');
   excludeSilkaDir(repoRoot);
-  return { worktreePath: wt, branch, baseCommit };
+  const hiddenSecrets = hideDeniedFiles(wt, denylist);
+  return { worktreePath: wt, branch, baseCommit, hiddenSecrets };
 }
 
 /**

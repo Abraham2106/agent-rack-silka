@@ -22,7 +22,7 @@
 // Variables opcionales: CODEX_BIN, OPENCODE_BIN, CURSOR_AGENT_BIN (ruta al binario/JS),
 // OPENCODE_DEFAULT_MODEL, AGENT_SHIM_NO_LOG=1.
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -45,6 +45,7 @@ import { beginTurn, finishTurn, oneLine } from '../src/silka/state.mjs';
 import { createTurnLog } from '../src/silka/transcript.mjs';
 import { noteModelError } from '../src/silka/models.mjs';
 import { harnessFreeEnv } from '../src/silka/hub.mjs';
+import { taskIdFromWorktree } from '../src/silka/containment.mjs';
 
 export { redactSecrets };
 
@@ -85,7 +86,8 @@ function silkaChildEnv(agent, rawPrompt) {
   const mark = readSilkaMark(rawPrompt);
   const base = mark.depth == null ? Number(process.env.SILKA_DEPTH || 0) : mark.depth;
   const depth = Number.isFinite(base) ? base + 1 : 1;
-  return { SILKA_DEPTH: String(depth), SILKA_AGENT: agent };
+  // SEC-16: el bridge del agente sabe de qué tarea es por la carpeta de trabajo (vacío = no es tarea).
+  return { SILKA_DEPTH: String(depth), SILKA_AGENT: agent, SILKA_TASK_ID: taskIdFromWorktree(process.cwd()) };
 }
 
 function attachTurn(agent, rawPrompt) {
@@ -511,7 +513,7 @@ export function finishOpencode(state, model = '') {
 function opencodeSpec() {
   const l = resolve('opencode', 'OPENCODE_BIN');
   if (!l) fail('No encontré OpenCode en el PATH (instálalo o define OPENCODE_BIN).');
-  const args = ['run', '--format', 'json'];
+  const args = ['run', ...opencodeSubagentArgs(opencodeHasStandalone(l)), '--format', 'json'];
   const model = opts.model || process.env.OPENCODE_DEFAULT_MODEL;
   if (model) args.push('-m', model);
   if (opts.resume) args.push('-s', opts.resume);
@@ -613,6 +615,40 @@ export function normalizeCodexArgs(argv) {
   return next;
 }
 
+/**
+ * SEC-15 (1.1): todo agente que lanza este shim es un sub-agente de Silka (su SILKA_DEPTH es al
+ * menos 1). Si ese nivel ya alcanza la profundidad máxima, Codex arranca sin el servidor agent-rack
+ * de la config global del usuario. Es un override por ejecución (-c), no un cambio de config; el
+ * efecto está verificado con `codex mcp list --json` (enabled:false). Con una profundidad máxima
+ * mayor, el servidor queda y el bridge oculta él mismo las herramientas que delegan.
+ */
+export function codexSubagentArgs(env = process.env, childDepth = null) {
+  const depth = childDepth ?? Number(env.SILKA_DEPTH || 0) + 1;
+  const max = Number(env.SILKA_MAX_DEPTH ?? 1);
+  return depth >= (Number.isFinite(max) ? max : 1) ? ['-c', 'mcp_servers.agent-rack.enabled=false'] : [];
+}
+
+/**
+ * SEC-15 (1.1): OpenCode 2.x lanza sus servidores MCP desde un servicio en segundo plano que NO hereda
+ * el entorno de `opencode run`; el bridge de la sesión nacía sin SILKA_DEPTH y ofrecía agent_session_create.
+ * Con --standalone el servidor es privado y sus bridges heredan SILKA_DEPTH, así que el bridge oculta las
+ * herramientas que delegan (verificado con opencode real: depth 0 expone agent_*, depth 1 solo silka_state,
+ * silka_changes y silka_decisions).
+ */
+export function opencodeSubagentArgs(supportsStandalone = true) {
+  return supportsStandalone ? ['--standalone'] : [];
+}
+
+/** Versiones de OpenCode sin servicio en segundo plano no traen --standalone: se detecta en su ayuda. */
+function opencodeHasStandalone(l) {
+  try {
+    const r = spawnSync(l.cmd, [...l.pre, 'run', '--help'], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+    return /--standalone/.test(`${r.stdout || ''}${r.stderr || ''}`);
+  } catch {
+    return false;
+  }
+}
+
 function runCodex(argv) {
   const l = resolve('codex', 'CODEX_BIN');
   if (!l) { process.stderr.write('No encontré Codex en el PATH (npm i -g @openai/codex o define CODEX_BIN).\n'); process.exit(127); }
@@ -622,7 +658,7 @@ function runCodex(argv) {
   turnLog = openTurnLog('codex', turned);
   const gate = createToolGate();
   if (args.length) args[args.length - 1] = turned.prompt;
-  const child = spawn(l.cmd, [...l.pre, ...args], {
+  const child = spawn(l.cmd, [...l.pre, ...codexSubagentArgs(process.env, Number(silkaChildEnv('codex', rawPrompt).SILKA_DEPTH)), ...args], {
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
     env: { ...harnessFreeEnv(process.env), ...silkaChildEnv('codex', rawPrompt) },

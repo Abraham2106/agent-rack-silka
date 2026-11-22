@@ -5,6 +5,7 @@ import { matchSession } from '../commands.mjs';
 import { createMergeService } from '../merge/service.mjs';
 import { createIntegrationService } from '../integration/service.mjs';
 import { createReviewService } from '../review/service.mjs';
+import { auditBlocked, taskScopeViolation } from '../containment.mjs';
 import { createTaskManager } from '../tasks/manager.mjs';
 import { addMemory, confirmMemory, expireMemory, listMemory, replaceMemory } from '../memory.mjs';
 import { planFromFile, planFromList } from '../tasks/plan.mjs';
@@ -67,6 +68,12 @@ export function createApiDispatcher(ctx) {
   return async function dispatchApi(path, args) {
     const method = path.join('.');
     const validated = validateApiArgs(path, args);
+    // SEC-16: una tarea solo toca su propio estado; el intento queda auditado y avisa al manager.
+    const violation = taskScopeViolation(method, validated, ctx.ownTaskId);
+    if (violation) {
+      auditBlocked({ taskId: ctx.ownTaskId, action: `codemode ${method}`, rule: 'SEC-16', message: violation });
+      throw silkaError('E_POLICY', violation);
+    }
 
     if (method === 'get') {
       const ref = validated[0];

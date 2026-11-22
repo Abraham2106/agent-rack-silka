@@ -16,6 +16,7 @@ import {
 } from './store.mjs';
 import { activeWorkStates, canTransition, STATES } from './states.mjs';
 import { createTaskWorktree, isValidWorktree, removeTaskWorktree } from './worktree.mjs';
+import { silkaSecretDenylist } from './denylist.mjs';
 import { assertVerifyDeclared, runVerifyWithEvidence } from './verify.mjs';
 import { lockfileHash, runSetupWithEvidence, setupForTask } from './setup.mjs';
 import { integrationBlockedReason } from '../integration/runner.mjs';
@@ -544,7 +545,7 @@ export class TaskManager {
 
     for (const pick of pickList) {
       const baseCommit = currentCommit(this.repoRoot);
-      const wt = createTaskWorktree(this.repoRoot, pick.id, baseCommit);
+      const wt = createTaskWorktree(this.repoRoot, pick.id, baseCommit, { denylist: silkaSecretDenylist() });
       const ports = pick.ports > 0 ? allocatePorts(this.repoRoot, pick.id, pick.ports) : [];
       mutateTaskStore(this.repoRoot, (store) => {
         const task = store.tasks.find((t) => t.id === pick.id);
