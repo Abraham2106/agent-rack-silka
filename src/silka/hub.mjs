@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,7 +8,7 @@ import { tokenFilePath } from 'agent-rack/dist/security/auth.js';
 import { startQueueDispatcher } from './dispatch.mjs';
 import { startMergeSupervisor } from './merge/supervisor.mjs';
 import { startTaskSupervisor } from './tasks/supervisor.mjs';
-import { withFileLock, writeAtomic } from './lock.mjs';
+import { readProcessStartMs, withFileLock, writeAtomic } from './lock.mjs';
 import { signalProcessTree } from './proc.mjs';
 import { createHubLink, describeNetError } from './hub-link.mjs';
 import { claimHubOwnership, releaseHubOwnership, shouldSpawnHub } from './hub-owner.mjs';
@@ -142,10 +142,31 @@ export function rememberPrompt(port, sessionId, prompt) {
   rememberSession(port, sessionId, { prompt });
 }
 
+const runtimeChecks = new Map();
+
+/**
+ * ¿El runtime de agent-rack es de un proceso vivo? No basta con que el pid exista: tras reiniciar
+ * el equipo queda el archivo del agent-rack anterior y su pid puede ser ahora de otro proceso
+ * (visto: `explorer.exe`). Entonces `silka hub` creía que el hub estaba en marcha y salía al
+ * instante, mientras agent-rack directo sí arrancaba (el puerto estaba libre). El proceso debe
+ * haber arrancado poco antes de escribir el runtime (`createdAt`).
+ */
+export function runtimeAlive(runtime, { startOf = readProcessStartMs } = {}) {
+  if (!runtime || !pidAlive(runtime.pid)) return false;
+  const created = Date.parse(runtime.createdAt);
+  if (!Number.isFinite(created)) return true;
+  const key = `${runtime.pid}|${runtime.createdAt}`;
+  if (!runtimeChecks.has(key)) {
+    const started = startOf(runtime.pid);
+    runtimeChecks.set(key, !Number.isFinite(started) || (started <= created + 5_000 && created - started <= 10 * 60_000));
+  }
+  return runtimeChecks.get(key);
+}
+
 export function hubStatus() {
   const cfg = loadSilkaConfig();
   const runtime = readRuntime(cfg.port);
-  const alive = Boolean(runtime && pidAlive(runtime.pid));
+  const alive = runtimeAlive(runtime);
   return {
     ...cfg,
     runtime,
@@ -231,6 +252,26 @@ export function writeEffectiveAgentRackConfig(config, port) {
   return file;
 }
 
+/**
+ * Línea de comando del proceso padre de `pid` si sigue vivo (y nació antes que el hijo, contra
+ * reuso de pid); '' si el padre murió. Sirve para saber si un agent-rack vivo es de un hub (de
+ * código anterior, sin registro de dueño) o quedó huérfano.
+ */
+export function liveParentCommandLine(pid) {
+  const id = Number(pid);
+  if (!Number.isInteger(id) || id <= 0) return '';
+  if (process.platform === 'win32') {
+    const script = `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${id}"; if ($p) { $q = Get-CimInstance Win32_Process -Filter "ProcessId=$($p.ParentProcessId)"; if ($q -and $q.CreationDate -le $p.CreationDate) { $q.CommandLine } }`;
+    const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true, timeout: 10_000 });
+    return String(r.stdout || '').trim();
+  }
+  const ppid = Number(String(spawnSync('ps', ['-o', 'ppid=', '-p', String(id)], { encoding: 'utf8' }).stdout || '').trim());
+  if (!Number.isInteger(ppid) || ppid <= 1) return '';
+  return String(spawnSync('ps', ['-o', 'args=', '-p', String(ppid)], { encoding: 'utf8' }).stdout || '').trim();
+}
+
+const isHubCommandLine = (cmd) => /cli.mjs"?s+hub/i.test(String(cmd || ''));
+
 export async function startHub() {
   const status = hubStatus();
   // BUG-04: un solo hub por puerto. Se reclama el puerto ANTES de arrancar supervisores: un hub
@@ -243,13 +284,19 @@ export async function startHub() {
     return;
   }
   process.once('exit', () => releaseHubOwnership(status.port));
+  let adopt = false;
   if (status.alive) {
-    releaseHubOwnership(status.port);
-    console.log(`Hub ya está en marcha en http://127.0.0.1:${status.port} (pid ${status.runtime.pid}).`);
-    return;
+    const parent = liveParentCommandLine(status.runtime.pid);
+    if (isHubCommandLine(parent)) {
+      // Un hub de código anterior (no registra dueño) sigue vivo con su agent-rack: no se compite.
+      releaseHubOwnership(status.port);
+      console.log(`Hub ya está en marcha en http://127.0.0.1:${status.port} (agent-rack pid ${status.runtime.pid}); este no arranca.`);
+      return;
+    }
+    // Punto 4 del plan: agent-rack quedó huérfano (su hub murió y él no). Antes `silka hub` decía
+    // "ya está en marcha" y salía: nadie corría los supervisores. Ahora el hub lo adopta.
+    adopt = true;
   }
-  const bin = path.join(status.root, 'node_modules', 'agent-rack', 'bin', 'agent-rack.js');
-  console.log(`Arrancando hub en http://127.0.0.1:${status.port}/sse`);
   const connectHub = async (runtime) => {
     const client = new DashboardRemoteClient(status.url, runtime.token);
     await client.connect();
@@ -260,7 +307,9 @@ export async function startHub() {
     readRuntime: () => readRuntime(status.port),
     connect: connectHub,
   });
-  hubLog(`hub arrancando en el puerto ${status.port}`);
+  hubLog(adopt
+    ? `hub arrancando en el puerto ${status.port}: adopta el agent-rack huérfano (pid ${status.runtime.pid})`
+    : `hub arrancando en el puerto ${status.port}`);
   const stopTasks = startTaskSupervisor({
     readRuntime: () => readRuntime(status.port),
     connect: connectHub,
@@ -270,28 +319,49 @@ export async function startHub() {
     readRuntime: () => readRuntime(status.port),
     connect: connectHub,
   });
-  const agentRackConfig = writeEffectiveAgentRackConfig(status.config, status.port);
-  hubLog(`agent-rack con worktrees permitidos en ${silkaWorktreesRoot()}`);
-  const child = spawn(process.execPath, [bin, 'start', '-t', 'sse', '-c', agentRackConfig], {
-    cwd: status.root,
-    stdio: 'inherit',
-    env: process.env,
-  });
-  await new Promise((resolve, reject) => {
-    child.once('error', reject);
-    child.once('exit', (code) => {
-      if (code) process.exitCode = code;
-      resolve();
-    });
-    const stop = () => {
-      signalProcessTree(child.pid);
-      const force = setTimeout(() => signalProcessTree(child.pid, { force: true }), 2000);
-      child.once('exit', () => clearTimeout(force));
-    };
+  const onSignal = (stop) => {
     process.once('SIGINT', stop);
     process.once('SIGTERM', stop);
     if (process.platform === 'win32') process.once('SIGBREAK', stop);
-  });
+  };
+  if (adopt) {
+    console.log(`Hub en http://127.0.0.1:${status.port}/sse: agent-rack ya corría sin hub (pid ${status.runtime.pid}); se adopta.`);
+    const pid = status.runtime.pid;
+    await new Promise((resolve) => {
+      // Sin handle de proceso hijo: se vigila el pid; el intervalo (con ref) mantiene vivo al hub.
+      const timer = setInterval(() => {
+        if (!pidAlive(pid)) { clearInterval(timer); resolve(); }
+      }, 2000);
+      onSignal(() => {
+        signalProcessTree(pid);
+        setTimeout(() => signalProcessTree(pid, { force: true }), 2000).unref();
+      });
+    });
+    hubLog(`el agent-rack adoptado (pid ${pid}) terminó; el hub se cierra`);
+  } else {
+    const bin = path.join(status.root, 'node_modules', 'agent-rack', 'bin', 'agent-rack.js');
+    console.log(`Arrancando hub en http://127.0.0.1:${status.port}/sse`);
+    const agentRackConfig = writeEffectiveAgentRackConfig(status.config, status.port);
+    hubLog(`agent-rack con worktrees permitidos en ${silkaWorktreesRoot()}`);
+    const child = spawn(process.execPath, [bin, 'start', '-t', 'sse', '-c', agentRackConfig], {
+      cwd: status.root,
+      stdio: 'inherit',
+      env: process.env,
+    });
+    await new Promise((resolve, reject) => {
+      child.once('error', reject);
+      child.once('exit', (code, signal) => {
+        if (code) process.exitCode = code;
+        hubLog(`agent-rack terminó (código ${code ?? '-'}${signal ? `, señal ${signal}` : ''}); el hub se cierra`);
+        resolve();
+      });
+      onSignal(() => {
+        signalProcessTree(child.pid);
+        const force = setTimeout(() => signalProcessTree(child.pid, { force: true }), 2000);
+        child.once('exit', () => clearTimeout(force));
+      });
+    });
+  }
   await stopDispatch();
   await stopTasks();
   await stopMerge();

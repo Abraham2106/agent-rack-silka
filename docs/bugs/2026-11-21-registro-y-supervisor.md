@@ -234,3 +234,32 @@ proceso no atendía nada: ni el SSE con agent-rack, ni los temporizadores, ni lo
 - **Prueba real:** `npm run e2e:ciclo` con los cuatro escenarios: pausa máxima del proceso 72 ms durante el
   verify de 25 s (antes 25 790 ms) y sin `Connection closed`. Con `--escenarios lento --verify-s 150` (verify de
   150 s en dos tramos, más que el vigilante de 2 min): ficha pass, pausa máxima 98 ms, sin aviso de ciclo colgado.
+
+## El hub se cerraba solo al correr `silka hub` en una terminal (punto 4 del plan)
+
+**Síntoma:** `node src/silka/cli.mjs hub` en una terminal salía enseguida, mientras agent-rack directo sí se
+quedaba vivo.
+
+**Reproducido (puerto de prueba 18999, config temporal):**
+1. **Runtime viejo con pid reusado.** agent-rack deja `~/.config/agent-rack/runtime/sse-<puerto>.json` con su
+   pid; tras un apagado brusco o un reinicio el archivo queda y ese pid pasa a ser de otro proceso. `hubStatus`
+   solo miraba que el pid existiera: con el pid de `explorer.exe` en el archivo, `silka hub` imprimió
+   "Hub ya está en marcha … (pid 16028)" y salió con código 0. agent-rack directo sí arrancaba (puerto libre).
+2. **agent-rack huérfano.** Con un agent-rack vivo sin hub (arrancado directo, o su hub murió y él no),
+   `silka hub` decía lo mismo y salía: nadie corría los supervisores.
+3. **Otro hub vivo** (p. ej. el minimizado que levanta `ensureHub`): salía con una línea fácil de pasar por alto.
+   Con BUG-04 ahora dice qué hub es (pid, desde cuándo, log).
+
+En la terminal del panel, un hub sano en un puerto libre se quedó vivo más de 8 min; no se encontró otra causa.
+
+**Arreglo:**
+- `runtimeAlive`: el runtime cuenta como vivo solo si su proceso arrancó poco antes de escribirlo
+  (`createdAt`); un pid reusado no cuenta. El chequeo de hora de inicio se cachea por pid + fecha.
+- Si agent-rack está vivo y su proceso padre es un `silka hub` vivo (código anterior, sin registro de dueño),
+  el hub nuevo no compite y lo dice. Si el padre murió, **adopta** ese agent-rack: arranca los supervisores,
+  vigila su pid y, cuando termina, lo anota en `hub.log` y se cierra.
+- El hub anota en `hub.log` por qué se cierra (agent-rack terminó, con código o señal).
+- Pruebas: `test/hub-runtime.test.mjs`.
+- **Prueba real:** con el runtime falso (pid de `explorer.exe`) el hub ahora arranca agent-rack y se queda
+  vivo. Con un agent-rack huérfano arrancado directo, `silka hub` lo adopta ("agent-rack ya corría sin hub;
+  se adopta"), se queda vivo y, al matar ese agent-rack, se cierra con el motivo en el log.
