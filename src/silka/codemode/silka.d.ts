@@ -170,6 +170,34 @@ export interface SilkaState {
   decide(text: string): Promise<string>;
 }
 
+export type MemoryType = 'decisión' | 'aprendizaje' | 'preferencia';
+export type MemoryStatus = 'vigente' | 'pendiente' | 'vencida' | 'reemplazada';
+
+export interface MemoryEntry {
+  id: string;
+  at: string;
+  author: string;
+  type: MemoryType;
+  text: string;
+  /** Rutas o áreas a las que aplica la entrada (`*` = global). */
+  tags: string[];
+  source: string;
+  status: MemoryStatus;
+}
+
+export interface SilkaMemory {
+  /** Entradas de memoria (por defecto vigentes y pendientes). */
+  list(opts?: { all?: boolean; scope?: string }): Promise<MemoryEntry[]>;
+  /** Añade una entrada vigente con etiquetas de alcance. */
+  add(entry: { type: MemoryType; text: string; tags?: string[] }): Promise<MemoryEntry>;
+  /** Confirma una propuesta pendiente (pasa a vigente). */
+  confirm(id: string): Promise<MemoryEntry>;
+  /** Marca una entrada como vencida (no se borra). */
+  expire(id: string): Promise<MemoryEntry>;
+  /** Sustituye una entrada: la nueva vigente y la anterior marcada como reemplazada. */
+  replace(id: string, text: string): Promise<MemoryEntry>;
+}
+
 export interface SilkaAgents {
   /** Agentes disponibles en el hub. */
   list(): Promise<AgentInfo[]>;
@@ -194,6 +222,7 @@ export interface SilkaMerge {
 export interface Silka {
   plan: SilkaPlan;
   state: SilkaState;
+  memory: SilkaMemory;
   agents: SilkaAgents;
   review: SilkaReview;
   merge: SilkaMerge;

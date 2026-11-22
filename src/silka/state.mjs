@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { graphHint } from './graph.mjs';
 import { withFileLock, writeAtomic } from './lock.mjs';
+import { readVigentDecisions } from './memory.mjs';
 import { recentInsertions } from './notes.mjs';
 import { originLabel } from './origin.mjs';
 
@@ -66,19 +67,9 @@ function writeStore(workspace, store) {
   writeAtomic(tasksFile(workspace), `${JSON.stringify(store, null, 2)}\n`);
 }
 
+// Solo decisiones vigentes (agent-memory): las pendientes, vencidas o reemplazadas no entran al estado.
 export function readDecisions(workspace) {
-  try {
-    return fs.readFileSync(decisionsFile(workspace), 'utf8').split(/\r?\n/).filter(Boolean).flatMap((line) => {
-      try {
-        const row = JSON.parse(line);
-        return row && typeof row === 'object' ? [row] : [];
-      } catch {
-        return [];
-      }
-    });
-  } catch {
-    return [];
-  }
+  return readVigentDecisions(workspace);
 }
 
 export function oneLine(value, max = 88) {
