@@ -11,6 +11,7 @@ import { startTaskSupervisor } from './tasks/supervisor.mjs';
 import { withFileLock, writeAtomic } from './lock.mjs';
 import { signalProcessTree } from './proc.mjs';
 import { createHubLink, describeNetError } from './hub-link.mjs';
+import { claimHubOwnership, releaseHubOwnership, shouldSpawnHub } from './hub-owner.mjs';
 import { silkaConfigDir, silkaDataDir } from './paths.mjs';
 
 /** Log del hub en archivo: su consola va minimizada y nadie la lee. */
@@ -178,16 +179,20 @@ export function harnessFreeEnv(env = process.env) {
 export async function ensureHub() {
   const current = hubStatus();
   if (current.alive && current.runtime?.token) return current;
-  const cli = fileURLToPath(new URL('./cli.mjs', import.meta.url));
-  const env = harnessFreeEnv(process.env);
-  // En Windows el hub necesita consola propia: sin ella, las terminales de los agentes
-  // (Cursor) fallan con "Can't find Bash". Se abre minimizada con `start /min`.
-  const child = process.platform === 'win32'
-    ? spawn('cmd.exe', ['/d', '/c', 'start', '"silka hub"', '/min', `"${process.execPath}"`, `"${cli}"`, 'hub'], {
-      cwd: current.root, detached: true, stdio: 'ignore', windowsHide: true, windowsVerbatimArguments: true, env,
-    })
-    : spawn(process.execPath, [cli, 'hub'], { cwd: current.root, detached: true, stdio: 'ignore', env });
-  child.unref();
+  // BUG-04: bajo candado, un solo cliente lanza el hub; los demás esperan a que aparezca.
+  const spawnIt = shouldSpawnHub(current.port, { isAlive: () => hubStatus().alive });
+  if (spawnIt) {
+    const cli = fileURLToPath(new URL('./cli.mjs', import.meta.url));
+    const env = harnessFreeEnv(process.env);
+    // En Windows el hub necesita consola propia: sin ella, las terminales de los agentes
+    // (Cursor) fallan con "Can't find Bash". Se abre minimizada con `start /min`.
+    const child = process.platform === 'win32'
+      ? spawn('cmd.exe', ['/d', '/c', 'start', '"silka hub"', '/min', `"${process.execPath}"`, `"${cli}"`, 'hub'], {
+        cwd: current.root, detached: true, stdio: 'ignore', windowsHide: true, windowsVerbatimArguments: true, env,
+      })
+      : spawn(process.execPath, [cli, 'hub'], { cwd: current.root, detached: true, stdio: 'ignore', env });
+    child.unref();
+  }
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     const status = hubStatus();
@@ -228,7 +233,18 @@ export function writeEffectiveAgentRackConfig(config, port) {
 
 export async function startHub() {
   const status = hubStatus();
+  // BUG-04: un solo hub por puerto. Se reclama el puerto ANTES de arrancar supervisores: un hub
+  // que ve a otro vivo no arranca nada.
+  const claim = claimHubOwnership(status.port);
+  if (!claim.ok) {
+    const { pid, since } = claim.owner;
+    console.log(`Ya hay un hub de Silka en el puerto ${status.port} (pid ${pid}, desde ${since}); este no arranca.`);
+    console.log(`Un solo hub por puerto. Su log: ${hubLogPath()}`);
+    return;
+  }
+  process.once('exit', () => releaseHubOwnership(status.port));
   if (status.alive) {
+    releaseHubOwnership(status.port);
     console.log(`Hub ya está en marcha en http://127.0.0.1:${status.port} (pid ${status.runtime.pid}).`);
     return;
   }
@@ -279,6 +295,7 @@ export async function startHub() {
   await stopDispatch();
   await stopTasks();
   await stopMerge();
+  releaseHubOwnership(status.port);
 }
 
 /** Abre un cliente del hub leyendo el token vigente (cambia si el hub se reinició). */

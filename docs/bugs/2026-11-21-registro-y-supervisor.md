@@ -48,8 +48,18 @@ despachadores de **todos** corrían y competían (rompe el invariante de un solo
 **Causa:** `ensureHub` no tiene candado: tras reiniciar, cada cliente (bridges de Claude/Codex/Cursor/OpenCode,
 TUI) vio "no hay hub" a la vez y levantó el suyo.
 
-**Pendiente (no arreglado):** candado de arranque en `ensureHub` (`withFileLock` sobre el runtime) y que
-`startHub` salga si otro hub ya tiene el puerto o el lease, antes de arrancar supervisores.
+**Arreglo (fase 1):** `src/silka/hub-owner.mjs`.
+- Dueño registrado por puerto: `<config>/hub-<puerto>.owner.json` con pid y hora de inicio del proceso (contra
+  reuso de pid). `startHub` lo reclama bajo candado **antes** de arrancar supervisores; si hay otro hub vivo,
+  dice cuál (pid, desde cuándo, log) y no arranca nada. Al salir suelta el registro si sigue siendo suyo.
+- Candado de arranque en `ensureHub`: bajo el mismo candado, solo un cliente decide lanzar el hub y deja una
+  marca; los demás esperan a que aparezca. Si en 20 s el hub no se registra, otro cliente puede relanzarlo.
+- Pruebas: `test/hub-owner.test.mjs` (segundo hub rechazado, pid muerto o reusado, 6 hubs a la vez → 1,
+  6 clientes en `ensureHub` a la vez → 1 lanza, dueño vivo → se espera).
+- **Prueba real:** 5 procesos llaman a `ensureHub` a la vez contra un puerto de prueba (18999, config temporal):
+  queda **1** hub nuevo vivo y los 5 reciben el mismo agent-rack. Un `silka hub` manual con ese hub vivo
+  responde "Ya hay un hub de Silka en el puerto 18999 (pid …); este no arranca" y sale con código 0.
+  No se repitió el escenario original (reinicio del equipo con varios bridges).
 
 ## BUG-05 · `ECONNRESET` al lanzar varias tareas juntas
 
