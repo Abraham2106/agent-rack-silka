@@ -47,6 +47,8 @@ export function buildDeliveryCard(task, {
       summary: diff?.statText || '',
     },
     openQuestions: task.openQuestions || [],
+    // model-routing (FR-MR-03): rol, agente, modelo y regla con que corrió la sesión.
+    routing: task.routing || null,
     risk: risk.level,
     riskDetail: risk,
     gates: allOk ? 'pass' : 'fail',

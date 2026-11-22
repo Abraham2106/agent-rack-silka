@@ -254,6 +254,19 @@ ${agent}  (${cat.models.length}${cat.total > cat.models.length ? ` de ${cat.tota
     }
     throw new Error('Uso: silka merge ls|status ...');
   }
+  if (cmd === 'routing') {
+    // model-routing: `silka routing show [--workspace dir]` imprime la tabla efectiva.
+    if (argv[1] !== 'show') throw new Error('Uso: silka routing show [--workspace dir]');
+    const { parseArgs } = await import('./commands.mjs');
+    const { formatRoutingTable } = await import('./routing.mjs');
+    const { loadSilkaConfig } = await import('./hub.mjs');
+    const { flags } = parseArgs(argv.slice(2));
+    const { agents, config } = loadSilkaConfig();
+    const defaultAgent = agents[0] || 'codex';
+    const defaultModel = config.agents?.[defaultAgent]?.model || '';
+    console.log(formatRoutingTable(flags.workspace || process.cwd(), { defaultAgent, defaultModel }));
+    return;
+  }
   if (cmd === 'memory') {
     const { memoryCommand } = await import('./memory.mjs');
     memoryCommand(argv.slice(1), process.cwd());

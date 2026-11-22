@@ -1,7 +1,24 @@
 import { silkaError } from '../codemode/errors.mjs';
 import { inferVerifyCommands } from './infer-verify.mjs';
+import { DEFAULT_ROLE, DEFAULT_SIZE, ROLES, SIZES } from '../routing.mjs';
 
 const REQUIRED = ['title', 'scope', 'deliver'];
+
+function normalizeRole(raw) {
+  if (raw == null || raw === '') return DEFAULT_ROLE;
+  if (!ROLES.includes(String(raw))) {
+    throw silkaError('E_TASK_INVALID', `role desconocido "${raw}" (usa ${ROLES.join(', ')}).`);
+  }
+  return String(raw);
+}
+
+function normalizeSize(raw) {
+  if (raw == null || raw === '') return DEFAULT_SIZE;
+  if (!SIZES.includes(String(raw))) {
+    throw silkaError('E_TASK_INVALID', `size desconocido "${raw}" (usa ${SIZES.join(', ')}).`);
+  }
+  return String(raw);
+}
 
 function parseVerify(raw) {
   if (raw == null || raw === '') return [];
@@ -80,6 +97,9 @@ export function normalizeTaskInput(raw, { id, repoRoot, strictVerify = false } =
     maxRepairs: Number.isInteger(maxRepairs) && maxRepairs >= 0 ? maxRepairs : 2,
     agent: raw.agent ? String(raw.agent) : undefined,
     model: raw.model ? String(raw.model) : undefined,
+    // model-routing: rol y tamaño eligen agente y modelo desde .silka/routing.json (si existe).
+    role: normalizeRole(raw.role),
+    size: normalizeSize(raw.size),
     dependsOn,
     planId: raw.planId ? String(raw.planId) : undefined,
     wave: Number.isInteger(wave) && wave >= 0 ? wave : undefined,
