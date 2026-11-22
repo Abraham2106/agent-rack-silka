@@ -1,0 +1,1 @@
+Spec vigente: [openspec/specs/code-mode/spec.md](../../../openspec/specs/code-mode/spec.md)

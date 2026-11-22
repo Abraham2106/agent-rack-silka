@@ -1,0 +1,1 @@
+Spec vigente: [openspec/specs/context-metrics/spec.md](../../../openspec/specs/context-metrics/spec.md)

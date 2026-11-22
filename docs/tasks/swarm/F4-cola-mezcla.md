@@ -1,0 +1,7 @@
+Tarea F4: implementa la cola de mezcla de un solo escritor.
+
+Fuente de verdad: `docs/specs/features/F4-cola-mezcla.md` (FR-MQ-01…09, SEC-06, SEC-10, pruebas T-MQ), `docs/adr/0006-*` y `0007-*`, `docs/architecture/concurrency.md`. Reutiliza `src/silka/lock.mjs` (lease/lock), `src/silka/tasks/` (git helper sin hooks, manager, verify, worktree, store) y `src/silka/review/` (approve deja la tarea lista para la cola). Conecta `silka.merge.queue()` y `status(id)` en `src/silka/codemode/` (hoy E_NOT_IMPLEMENTED) y el comando `silka merge ls|status`.
+
+Alcance: módulo `src/silka/merge/` con dueño único y fencing token, FIFO por aprobación, diario `.silka/merge-journal.jsonl` antes/después de cada paso, rebase + verify + fast-forward con compare-and-swap (`update-ref` con valor viejo), conflicto o verify fallido → "reparando" devolviendo el error íntegro a la sesión, no tocar el árbol del builder con cambios sin commitear, nunca push ni reescribir historia del destino, recuperación desde el diario tras caída, limpieza de worktree y rama y desbloqueo de dependientes al mezclar, y un supervisor que se engancha en `silka hub` como el de tareas. Tests `test/merge.test.mjs` (repo git temporal, agente falso; incluye T-MQ-01…05, caída a medias y fencing) agregado al script `test`.
+
+Reglas: trabaja SOLO en este worktree (rama `swarm/f4`), sin commits ni cambio de rama. Ejecuta `npm test` y `node --check`; si algo falla en la terminal, dilo. No toques el hub del puerto 8987. Responde en 8 líneas o menos con el resultado REAL y lo que no quedó.

@@ -1,0 +1,1 @@
+Spec vigente: [openspec/specs/merge-queue/spec.md](../../../openspec/specs/merge-queue/spec.md)

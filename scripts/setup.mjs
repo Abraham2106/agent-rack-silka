@@ -10,6 +10,8 @@
 //   --scope <s>            Alcance en Claude Code: user (defecto) | project | local
 //   --no-register          No registra el MCP en Claude Code (solo imprime el comando).
 //   --no-skill             No instala el skill "delegar" en ~/.claude/skills.
+//   --no-bridge            No registra silka bridge; deja el MCP stdio directo de agent-rack.
+//   --connect all          Registra el puente en Claude, Codex, Cursor y OpenCode.
 //
 // Es idempotente: si ya existe agent-rack.config.json, conserva carpetas y modelos que
 // no pases por flag.
@@ -46,8 +48,14 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--scope') flags.scope = take();
   else if (a === '--no-register') flags.noRegister = true;
   else if (a === '--no-skill') flags.noSkill = true;
+  else if (a === '--no-bridge') flags.noBridge = true;
+  else if (a === '--connect') {
+    const value = take();
+    if (value !== 'all') { console.error(red('Usa --connect all')); process.exit(2); }
+    flags.connectAll = true;
+  }
   else if (a === '-h' || a === '--help') {
-    console.log(fs.readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 17).map((l) => l.replace(/^\/\/ ?/, '')).join('\n'));
+    console.log(fs.readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 18).map((l) => l.replace(/^\/\/ ?/, '')).join('\n'));
     process.exit(0);
   } else { console.error(red(`Opción desconocida: ${a}`)); process.exit(2); }
 }
@@ -66,6 +74,10 @@ if (!fs.existsSync(SERVER)) {
   if (r.status !== 0 || !fs.existsSync(SERVER)) { console.error(red('npm install falló.')); process.exit(1); }
 }
 ok('agent-rack instalado');
+
+// connect.mjs → hub.mjs → agent-rack. Tiene que ir después del npm install.
+const { connectHarness } = await import('../src/silka/connect.mjs');
+const { graphStatus } = await import('../src/silka/graph.mjs');
 
 // ---- 2. detectar agentes ----------------------------------------------------
 function version(cmd) {
@@ -159,18 +171,40 @@ const check = spawnSync(process.execPath, [SERVER, 'config-check', '-c', CONFIG]
 if (check.status !== 0) { console.error(red('La config no pasó la validación:\n') + check.stdout + check.stderr); process.exit(1); }
 ok('Config válida');
 
-// ---- 4. registrar en Claude Code --------------------------------------------
+// ---- 4. registrar el MCP ----------------------------------------------------
 const scope = flags.scope ?? 'user';
-const addArgs = ['mcp', 'add', '--scope', scope, 'agent-rack', '--', 'node', SERVER.replaceAll('\\', '/'), 'start', '-c', CONFIG.replaceAll('\\', '/')];
 const hasClaude = Boolean(version('claude'));
-if (flags.noRegister || !hasClaude) {
-  if (!hasClaude) warn('No encontré el CLI `claude`. Registra el MCP a mano:');
-  console.log('\n  claude ' + addArgs.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' ') + '\n');
+if (flags.noBridge) {
+  const addArgs = ['mcp', 'add', '--scope', scope, 'agent-rack', '--', 'node', SERVER.replaceAll('\\', '/'), 'start', '-c', CONFIG.replaceAll('\\', '/')];
+  if (flags.noRegister || !hasClaude) {
+    if (!hasClaude) warn('No encontré el CLI `claude`. Registra el MCP a mano:');
+    console.log('\n  claude ' + addArgs.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' ') + '\n');
+  } else {
+    spawnSync('claude', ['mcp', 'remove', 'agent-rack', '--scope', scope], { stdio: 'ignore', shell: IS_WIN });
+    const r = spawnSync('claude', addArgs.map((a) => (IS_WIN && /\s/.test(a) ? `"${a}"` : a)), { encoding: 'utf8', shell: IS_WIN });
+    if (r.status === 0) ok(`Registrado en Claude Code (scope: ${scope})`);
+    else { warn('No pude registrar el MCP automáticamente:'); console.log(r.stdout + r.stderr); }
+  }
 } else {
-  spawnSync('claude', ['mcp', 'remove', 'agent-rack', '--scope', scope], { stdio: 'ignore', shell: IS_WIN });
-  const r = spawnSync('claude', addArgs.map((a) => (IS_WIN && /\s/.test(a) ? `"${a}"` : a)), { encoding: 'utf8', shell: IS_WIN });
-  if (r.status === 0) ok(`Registrado en Claude Code (scope: ${scope})`);
-  else { warn('No pude registrar el MCP automáticamente:'); console.log(r.stdout + r.stderr); }
+  const target = flags.connectAll ? 'all' : 'claude';
+  try {
+    const text = connectHarness(target, { dryRun: Boolean(flags.noRegister) });
+    for (const line of text.split('\n')) ok(line);
+  } catch (err) {
+    warn(err instanceof Error ? err.message : String(err));
+  }
+}
+
+const SILKA_MCP = path.join(ROOT, 'src', 'silka', 'mcp.mjs').replaceAll('\\', '/');
+const silkaAdd = ['mcp', 'add', '--scope', scope, 'silka', '--', 'node', SILKA_MCP];
+if (flags.noRegister || !hasClaude) {
+  if (!hasClaude) warn('No encontré el CLI `claude`. Registra el MCP de silka a mano:');
+  console.log('\n  claude ' + silkaAdd.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' ') + '\n');
+} else {
+  spawnSync('claude', ['mcp', 'remove', 'silka', '--scope', scope], { stdio: 'ignore', shell: IS_WIN });
+  const r = spawnSync('claude', silkaAdd.map((a) => (IS_WIN && /\s/.test(a) ? `"${a}"` : a)), { encoding: 'utf8', shell: IS_WIN });
+  if (r.status === 0) ok(`silka registrado en Claude Code (scope: ${scope})`);
+  else { warn('No pude registrar el MCP de silka automáticamente:'); console.log(r.stdout + r.stderr); }
 }
 
 // ---- 5. skill ---------------------------------------------------------------
@@ -183,6 +217,9 @@ if (!flags.noSkill) {
 }
 
 // ---- listo ------------------------------------------------------------------
+const graphLine = graphStatus(ROOT).text.split('\n')[0];
+info(`Graphify (opcional): ${graphLine}`);
+
 console.log(bold('\nListo.'));
 console.log(`  1. Asegúrate de haber iniciado sesión en cada agente (codex login · opencode auth login · cursor-agent login).`);
 console.log(`  2. Reinicia Claude Code (o abre una sesión nueva) para cargar las herramientas.`);

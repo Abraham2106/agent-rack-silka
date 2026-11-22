@@ -8,6 +8,10 @@ description: Delegar trabajo de código a Codex, OpenCode o Cursor a través del
 Tú eres quien decide y revisa. Los otros agentes ejecutan. Delegar cuesta solo un tool call
 y te devuelve la respuesta final del agente, sin el transcript.
 
+El MCP `agent-rack` es el puente de silka (`silka bridge`): la sesión queda en el hub y se ve en
+`silka ui` con tu origen. Si una herramienta responde que `SILKA_DEPTH` llegó al máximo, no
+insistas: ese agente ya está anidado y no puede lanzar otro.
+
 ## Cuándo delegar
 - Tareas de implementación claras: un endpoint, un componente, un refactor, tests, un fix con causa conocida.
 - Trabajo paralelo e independiente: lanza varias sesiones a la vez (máximo 5).
@@ -40,7 +44,27 @@ absoluta del repo.
 - Seguimiento sobre el mismo trabajo: `agent_session_send` (retoma la misma conversación).
 - No hagas polling seguido. Revisa cuando termines tu propio trabajo.
 
+## Estado del proyecto
+El shim ya antepone un bloque corto al prompt. Si necesitas el mismo dato, o quieres dejar una decisión:
+
+- `silka_state({workspace})` — rama, HEAD, cambios de otros agentes, tareas en curso y las últimas decisiones.
+- `silka_changes({workspace, since?})` — qué cambió desde una fecha ISO. Sin `since`, las últimas 2 horas.
+- `silka_decide({workspace, text})` — anota una decisión (autor, fecha, sesión y texto).
+- `silka_decisions({workspace, limit})` — las últimas decisiones.
+
+`workspace` es la ruta absoluta del repo. No pegues archivos enteros: el bloque ya es corto.
+
+## Corregir a un agente (`silka_send`)
+Úsalo para corregir algo que mandaste mal, o cuando el usuario te lo pida
+("lo que le mandaste a codex está mal, corrígelo").
+
+- `silka_send({sessionId, text})` encola. Es lo normal: el agente lo recibe al terminar el turno.
+- `silka_send({sessionId, text, now:true})` interrumpe y retoma la misma conversación. Úsalo solo si el agente va por mal camino. Si no, encola. Reanudar carga el contexto otra vez y gasta tokens.
+- El autor queda como `claude`.
+- Si `silka_notes` o `silka_state` traen una inserción del usuario (`tú → agente`), respétala. No la contradigas sin preguntarle.
+
 ## Verificar (ligero)
+Al revisar una sesión, llama `silka_notes`.
 Elige una:
 1. Mira `git diff --stat` y corre tú el comando de prueba.
 2. Pídele a otro agente `agent_review` (solo lectura, devuelve `verdict` y `findings`).

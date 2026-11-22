@@ -1,0 +1,1 @@
+Spec vigente: [openspec/specs/review-inbox/spec.md](../../../openspec/specs/review-inbox/spec.md)

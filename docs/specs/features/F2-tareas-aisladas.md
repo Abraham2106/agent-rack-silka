@@ -1,0 +1,1 @@
+Spec vigente: [openspec/specs/isolated-tasks/spec.md](../../../openspec/specs/isolated-tasks/spec.md)
