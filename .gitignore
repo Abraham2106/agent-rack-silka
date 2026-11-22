@@ -8,3 +8,6 @@ smoke-*.txt
 agent-rack.config.json
 # capturas locales del TUI (tienen contenido de sesiones reales)
 docs/assets/tui-*.html
+# informes de evals (cada corrida); se versiona solo el .gitkeep
+evals/reports/*
+!evals/reports/.gitkeep
