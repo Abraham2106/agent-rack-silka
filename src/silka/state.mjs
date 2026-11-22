@@ -229,11 +229,12 @@ function taskFiles(task) {
     .filter((file) => !String(file).startsWith('.silka/') && !String(file).startsWith('.git/') && !String(file).startsWith('graphify-out/'));
 }
 
-export function formatBlock(workspace, { excludeId } = {}) {
+export function formatBlock(workspace, { excludeId, excludeTasks = false } = {}) {
   const store = readStore(workspace);
   const repo = repoInfo(workspace);
   const since = new Date(Date.now() - TWO_HOURS).toISOString();
-  const tasks = store.tasks || [];
+  // SEC-16: una tarea no ve el estado de otras tareas (excludeTasks: sin "en curso" ni terminadas).
+  const tasks = excludeTasks ? [] : (store.tasks || []);
   const others = tasks
     .filter((task) => task.id !== excludeId && task.finishedAt && task.finishedAt >= since)
     .sort((a, b) => String(b.finishedAt).localeCompare(String(a.finishedAt)));

@@ -45,6 +45,7 @@ import { beginTurn, finishTurn, oneLine } from '../src/silka/state.mjs';
 import { createTurnLog } from '../src/silka/transcript.mjs';
 import { noteModelError } from '../src/silka/models.mjs';
 import { harnessFreeEnv } from '../src/silka/hub.mjs';
+import { taskIdFromWorktree } from '../src/silka/containment.mjs';
 
 export { redactSecrets };
 
@@ -85,7 +86,8 @@ function silkaChildEnv(agent, rawPrompt) {
   const mark = readSilkaMark(rawPrompt);
   const base = mark.depth == null ? Number(process.env.SILKA_DEPTH || 0) : mark.depth;
   const depth = Number.isFinite(base) ? base + 1 : 1;
-  return { SILKA_DEPTH: String(depth), SILKA_AGENT: agent };
+  // SEC-16: el bridge del agente sabe de qué tarea es por la carpeta de trabajo (vacío = no es tarea).
+  return { SILKA_DEPTH: String(depth), SILKA_AGENT: agent, SILKA_TASK_ID: taskIdFromWorktree(process.cwd()) };
 }
 
 function attachTurn(agent, rawPrompt) {

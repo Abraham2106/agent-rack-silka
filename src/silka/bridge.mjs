@@ -22,6 +22,7 @@ import {
 } from './codemode/index.mjs';
 import { createBridgeToolCaller, createHubCaller } from './codemode/bridge-context.mjs';
 import { isSilkaError } from './codemode/errors.mjs';
+import { auditBlocked, callerTaskId } from './containment.mjs';
 
 const READ_ONLY_AT_MAX = new Set(['silka_state', 'silka_changes', 'silka_decisions']);
 
@@ -109,6 +110,14 @@ const STATE_TOOLS = [
     },
   },
 ];
+
+/** SEC-15: el intento de delegar por encima de la profundidad se rechaza con E_POLICY y queda auditado. */
+function depthBlocked(name, depth, { code = false } = {}) {
+  const message = depthBlockMessage(depth);
+  auditBlocked({ taskId: callerTaskId(), action: name, rule: 'SEC-15', message });
+  const text = code ? JSON.stringify({ code: 'E_POLICY', message }) : message;
+  return textResult(text, true);
+}
 
 function textResult(text, isError = false) {
   return { content: [{ type: 'text', text: String(text) }], ...(isError ? { isError: true } : {}) };
@@ -278,7 +287,10 @@ function localTool(name, args, from, sessions) {
   } catch (err) {
     return textResult(err instanceof Error ? err.message : String(err), true);
   }
-  if (name === 'silka_state') return textResult(formatBlock(workspace));
+  if (name === 'silka_state') {
+    // SEC-16: un agente de tarea no ve las tareas en curso ni terminadas de otros.
+    return textResult(formatBlock(workspace, { excludeTasks: Boolean(callerTaskId()) }));
+  }
   if (name === 'silka_changes') {
     try { return textResult(formatChanges(workspace, args.since)); }
     catch (err) { return textResult(err instanceof Error ? err.message : String(err), true); }
@@ -356,6 +368,7 @@ export async function startBridge() {
       const text = name === 'silka_notes' && !manager
         ? 'silka_notes es solo para el manager (claude o tú), no para sub-agentes.'
         : depthBlockMessage();
+      if (name !== 'silka_notes' || manager) auditBlocked({ taskId: callerTaskId(), action: name, rule: 'SEC-15', message: text });
       return { content: [{ type: 'text', text }], isError: true };
     }
     if (name === 'silka_notes') {
@@ -394,7 +407,7 @@ export async function startBridge() {
         origins: readOrigins(),
       });
       if (lineage.depth >= maxDepth() && !isManager(from)) {
-        return textResult(JSON.stringify({ code: 'E_POLICY', message: depthBlockMessage(lineage.depth) }), true);
+        return depthBlocked(name, lineage.depth, { code: true });
       }
       try {
         const execution = await executeCodeMode({
@@ -403,6 +416,7 @@ export async function startBridge() {
           timeoutSeconds: args.timeoutSeconds,
           author: from,
           ctx: {
+            ownTaskId: callerTaskId(),
             callHub: createHubCaller(hub),
             callBridgeTool: async (toolName, toolArgs) => {
               if (toolName === 'silka_send') {
@@ -464,7 +478,7 @@ export async function startBridge() {
       origins: readOrigins(),
     });
     if (isDelegatingTool(name) && lineage.depth >= maxDepth()) {
-      return { content: [{ type: 'text', text: depthBlockMessage(lineage.depth) }], isError: true };
+      return depthBlocked(name, lineage.depth, { code: true });
     }
     const known = tools.some((tool) => tool.name === name);
     if (!known) {

@@ -16,6 +16,7 @@ export async function executeCodeMode({ code, workspace, timeoutSeconds, author,
     callHub: ctx.callHub,
     callBridgeTool: ctx.callBridgeTool,
     listSessions: ctx.listSessions,
+    ownTaskId: ctx.ownTaskId || '',
   });
 
   const runner = new SandboxRunner({
