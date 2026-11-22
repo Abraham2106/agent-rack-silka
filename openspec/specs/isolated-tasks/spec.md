@@ -151,11 +151,8 @@ el comportamiento SHALL ser el actual (setup inferido por lockfile).
 
 ### Requirement: FR-TK-13 Archivos no versionados
 The system SHALL copiar al worktree solo los archivos que el repo declara en `copy` (de `silka.json`) o en
-`.worktreeinclude`. Sin una entrada explícita (ruta literal, p. ej. `.env.local`) SHALL NOT copiar ningún `.env*`. Una
-entrada explícita SHALL ganar sobre el patrón `.env*` de la lista de denegación de secretos, pero MUST NOT ganar sobre
-`.env.production`, `.env.*.production`, llaves privadas (`*.pem`, `*.key`, `id_*`), `~/.ssh`, otros patrones de la
-lista ni rutas fuera del repo. Un comodín (p. ej. `.env*`) NO cuenta como entrada explícita y SHALL pasar por la
-lista de denegación completa.
+`.worktreeinclude`, y SHALL NOT copiar ningún `.env*` sin una entrada explícita (ruta literal). Una entrada explícita
+SHALL ganar sobre el patrón `.env*` de la lista de denegación de secretos, salvo en los secretos duros.
 
 #### Scenario: Entrada explícita copia el .env.local (WR-02)
 - **WHEN** `copy` incluye `.env.local` y el archivo existe sin versionar
@@ -168,6 +165,10 @@ lista de denegación completa.
 #### Scenario: Secretos duros nunca se copian (WR-02)
 - **WHEN** `copy` declara `.env.production`, `.env.eu.production`, `server.pem`, `api.key`, `id_rsa` o `../fuera.txt`
 - **THEN** ninguno se copia y cada uno queda en `skipped` con el motivo
+
+#### Scenario: Los secretos duros ganan siempre (WR-02)
+- **WHEN** una entrada explícita apunta a `.env.production`, `.env.*.production`, `*.pem`, `*.key`, `id_*`, `~/.ssh` u otro patrón de la lista distinto de `.env*`
+- **THEN** no se copia
 
 #### Scenario: Un comodín amplio no abre secretos (WR-02)
 - **WHEN** `copy` incluye `.env*` y rige la lista de denegación por defecto
