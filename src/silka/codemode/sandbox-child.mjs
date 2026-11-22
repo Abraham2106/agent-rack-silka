@@ -29,7 +29,7 @@ function plainError(err) {
 }
 
 const TOP = new Set(['launch', 'wait', 'waitAll', 'status', 'card', 'get', 'send', 'cancel']);
-const NS = new Set(['plan', 'state', 'agents', 'review', 'merge']);
+const NS = new Set(['plan', 'state', 'memory', 'agents', 'review', 'merge']);
 
 let invokeSeq = 0;
 const pending = new Map();

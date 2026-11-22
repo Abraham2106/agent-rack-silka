@@ -71,6 +71,18 @@ export function validateApiArgs(path, args) {
       return [assertOptionalString(list[0], 'since')];
     case 'state.decide':
       return [assertString(list[0], 'text')];
+    case 'memory.list':
+      return [list[0] || {}];
+    case 'memory.add': {
+      const opts = list[0];
+      if (!opts || typeof opts !== 'object') throw silkaError('E_POLICY', 'memory.add requiere { type, text, tags? }.');
+      return [{ ...opts, text: assertString(opts.text, 'text'), type: assertString(opts.type, 'type') }];
+    }
+    case 'memory.confirm':
+    case 'memory.expire':
+      return [assertString(list[0], 'id')];
+    case 'memory.replace':
+      return [assertString(list[0], 'id'), assertString(list[1], 'text')];
     case 'agents.list':
       return list;
     case 'agents.models':

@@ -13,6 +13,7 @@ function printHelp() {
   silka steer <id> "<mensaje>"   (alias de send --now)
   silka note <id> "<texto>"
   silka ui
+  silka memory add|ls|confirm|expire|replace  (memoria del proyecto; ver --help de memory)
   silka models [agente] [--refresh] [--json]
   silka models default <agente> <modelo>
   silka models filter <agente> [patrón...]   (sin patrones: quita el filtro; --all ignora filtros)
@@ -235,6 +236,11 @@ ${agent}  (${cat.models.length}${cat.total > cat.models.length ? ` de ${cat.tota
       return;
     }
     throw new Error('Uso: silka merge ls|status ...');
+  }
+  if (cmd === 'memory') {
+    const { memoryCommand } = await import('./memory.mjs');
+    memoryCommand(argv.slice(1), process.cwd());
+    return;
   }
   if (cmd === 'doctor') {
     // Solo lee el entorno (procesos, config, worktrees): no necesita hub ni arranca nada.
