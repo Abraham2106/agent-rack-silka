@@ -36,6 +36,7 @@ function printHelp() {
   silka merge status <id> [workspace]
   silka metrics [ls|stats <agente> [modelo]|baseline [N]]
   silka doctor [--json]   revisa el entorno (solo lee): hubs, bridges, CLIs, worktrees; sale con 1 si hay una falla
+  silka setup [--apply] [--json]   prepara la config de Silka (vista previa por defecto; --apply escribe solo en su carpeta)
 
 Sin hub, los comandos responden: corre: silka hub
 bridge es el MCP por stdio que comparte ese hub.
@@ -262,6 +263,12 @@ ${agent}  (${cat.models.length}${cat.total > cat.models.length ? ` de ${cat.tota
     // Solo lee el entorno (procesos, config, worktrees): no necesita hub ni arranca nada.
     const { doctorCommand } = await import('./doctor/index.mjs');
     process.exitCode = await doctorCommand(argv.slice(1));
+    return;
+  }
+  if (cmd === 'setup') {
+    // Vista previa por defecto (--dry-run); --apply escribe solo bajo la carpeta de config de Silka.
+    const { setupCommand } = await import('./setup/index.mjs');
+    process.exitCode = setupCommand(argv.slice(1));
     return;
   }
   if (cmd === 'connect' || cmd === 'disconnect') {
