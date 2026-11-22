@@ -34,8 +34,23 @@ test('dos procesos no se pisan las notas', async () => {
     for (let i = 0; i < 20; i++) unreadNotes({ markRead: true });
   `;
   await Promise.all([run(write, dir), run(read, dir)]);
-  const body = fs.readFileSync(path.join(dir, 'notes.jsonl'), 'utf8').trim().split(/\n/).filter(Boolean);
+  const body = fs.readFileSync(path.join(dir, 'notes', 's.jsonl'), 'utf8').trim().split(/\n/).filter(Boolean);
   assert.equal(body.length, 40);
   const ids = new Set(body.map((line) => JSON.parse(line).id));
   assert.equal(ids.size, 40);
+});
+
+test('SN-01: dos sesiones escriben a la vez y cada nota queda en su archivo', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'silka-notes-'));
+  const writer = (sid) => `
+    import { appendNote } from ${JSON.stringify(notesUrl)};
+    for (let i = 0; i < 60; i++) appendNote({ sessionId: ${JSON.stringify(sid)}, text: 'n' + i });
+  `;
+  await Promise.all([run(writer('sesion-a'), dir), run(writer('sesion-b'), dir)]);
+  for (const sid of ['sesion-a', 'sesion-b']) {
+    const notes = fs.readFileSync(path.join(dir, 'notes', `${sid}.jsonl`), 'utf8').trim().split(/\n/).map((l) => JSON.parse(l));
+    assert.equal(notes.length, 60);
+    assert.ok(notes.every((note) => note.sessionId === sid));
+  }
+  assert.equal(fs.existsSync(path.join(dir, 'notes.jsonl')), false);
 });
