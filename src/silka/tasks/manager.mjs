@@ -21,6 +21,7 @@ import { lockfileHash, runSetupWithEvidence, setupForTask } from './setup.mjs';
 import { integrationBlockedReason } from '../integration/runner.mjs';
 import { recordDeliveryMetricIfClosed } from '../metrics/task-close.mjs';
 import { deleteSessionNotes } from '../notes.mjs';
+import { memoryPrefix, noteTaskFailure, seedMemory } from '../memory.mjs';
 
 function nowIso() {
   return new Date().toISOString();
@@ -284,6 +285,8 @@ export class TaskManager {
   async launch(specs, opts = {}) {
     const manual = opts.manual ?? !opts.callHub;
     this.preferManual = manual;
+    // agent-memory: los aprendizajes conocidos entran una sola vez por workspace; no frena el lanzamiento.
+    try { seedMemory(this.repoRoot); } catch { /* la memoria es opcional */ }
     const rows = this.registerPlan(specs, { cause: opts.cause || 'launch', replace: Boolean(opts.replaceDiscarded), manual });
     try { registerTaskRepo(this.repoRoot); } catch { /* el registro no frena el lanzamiento */ }
     this.schedule({ manual });
@@ -327,7 +330,8 @@ export class TaskManager {
         continue;
       }
       if (sessionLimitActive()) continue;
-      const prompt = agentPrompt(task);
+      // agent-memory: solo entradas vigentes del alcance de esta tarea, antes del encargo.
+      const prompt = memoryPrefix(this.repoRoot, task.scope) + agentPrompt(task);
       if (!prompt.trim()) throw silkaError('E_POLICY', `La tarea ${task.id} no tiene prompt.`);
       const payload = {
         agent: task.agent || defaultAgent,
@@ -469,6 +473,8 @@ export class TaskManager {
       return store;
     });
     recordDeliveryMetricIfClosed(this.repoRoot, taskId);
+    // agent-memory: la ficha fallida registra su causa; el aprendizaje queda pendiente (no se inyecta).
+    noteTaskFailure(this.repoRoot, task, `setup falló: ${sr.items.find((i) => !i.ok)?.cmd || 'sin detalle'}`);
     return false;
   }
 
@@ -622,6 +628,7 @@ export class TaskManager {
     if (!force && (task.state === STATES.LISTA || task.state === STATES.VERIFICACION_FALLIDA)) return task.card;
 
     let runVerify = false;
+    let agotadoCause = null;
     mutateTaskStore(this.repoRoot, (store) => {
       const row = store.tasks.find((t) => t.id === taskId);
       if (!row) return store;
@@ -747,12 +754,15 @@ export class TaskManager {
             recordTransition(row, STATES.REPARANDO, 'verify_falló');
           } else {
             recordTransition(row, STATES.VERIFICACION_FALLIDA, 'verify_agotado');
+            agotadoCause = evidence.find((e) => e && !e.ok)?.cmd || 'verificación fallida';
           }
         }
       }
       return store;
     });
     recordDeliveryMetricIfClosed(this.repoRoot, taskId);
+    // agent-memory: fuera de la escritura del store (mismo lock); nunca lanza.
+    if (agotadoCause) noteTaskFailure(this.repoRoot, task, `verificación agotada: ${agotadoCause}`);
     return card;
   }
 
