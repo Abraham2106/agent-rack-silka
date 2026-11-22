@@ -141,6 +141,14 @@ test('SEC-16: silka_state de una tarea no lista las tareas en curso de otras', a
   }
 });
 
+test('AC-01 (1.1): un sub-agente de Codex arranca sin el servidor agent-rack; el manager no cambia', async () => {
+  const { codexSubagentArgs } = await import('../shims/agent-shim.mjs');
+  assert.deepEqual(codexSubagentArgs({ SILKA_DEPTH: '1' }), ['-c', 'mcp_servers.agent-rack.enabled=false']);
+  assert.deepEqual(codexSubagentArgs({ SILKA_DEPTH: '2' }), ['-c', 'mcp_servers.agent-rack.enabled=false']);
+  assert.deepEqual(codexSubagentArgs({}), []);
+  assert.deepEqual(codexSubagentArgs({ SILKA_DEPTH: '0' }), []);
+});
+
 test('SEC-17: la lista de la config de Silka se lee con SILKA_CONFIG y cae a la de por defecto', async () => {
   const { silkaSecretDenylist } = await import('../src/silka/tasks/denylist.mjs');
   const cfg = path.join(silkaDataDir(), `cfg-${Date.now().toString(36)}.json`);

@@ -615,6 +615,16 @@ export function normalizeCodexArgs(argv) {
   return next;
 }
 
+/**
+ * SEC-15 (1.1): un sub-agente de Silka (SILKA_DEPTH > 0) arranca Codex sin el servidor agent-rack
+ * de la config global del usuario. Es un override por ejecución (-c), no un cambio de config; el
+ * efecto está verificado con `codex mcp list --json` (enabled:false).
+ */
+export function codexSubagentArgs(env = process.env) {
+  const depth = Number(env.SILKA_DEPTH || 0);
+  return Number.isFinite(depth) && depth > 0 ? ['-c', 'mcp_servers.agent-rack.enabled=false'] : [];
+}
+
 function runCodex(argv) {
   const l = resolve('codex', 'CODEX_BIN');
   if (!l) { process.stderr.write('No encontré Codex en el PATH (npm i -g @openai/codex o define CODEX_BIN).\n'); process.exit(127); }
@@ -624,7 +634,7 @@ function runCodex(argv) {
   turnLog = openTurnLog('codex', turned);
   const gate = createToolGate();
   if (args.length) args[args.length - 1] = turned.prompt;
-  const child = spawn(l.cmd, [...l.pre, ...args], {
+  const child = spawn(l.cmd, [...l.pre, ...codexSubagentArgs(), ...args], {
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
     env: { ...harnessFreeEnv(process.env), ...silkaChildEnv('codex', rawPrompt) },
