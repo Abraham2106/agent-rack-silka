@@ -8,14 +8,14 @@
 
 ## 2. Estado por tarea
 
-- [ ] 2.1 Limitar las lecturas y escrituras de estado de un agente a su propia tarea y verificar con una prueba que leer otra da `E_POLICY` (AC-03)
+- [x] 2.1 Limitar las lecturas y escrituras de estado de un agente a su propia tarea y verificar con una prueba que leer otra da `E_POLICY` (AC-03)
 
 ## 3. Secretos
 
-- [ ] 3.1 Lista de denegación configurable con valores por defecto y verificar que el worktree no recibe `.env` (AC-04)
-- [ ] 3.2 Riesgo alto en la ficha si el diff toca la lista y verificar con una prueba (AC-05)
+- [x] 3.1 Lista de denegación configurable con valores por defecto y verificar que el worktree no recibe `.env` (AC-04)
+- [x] 3.2 Riesgo alto en la ficha si el diff toca la lista y verificar con una prueba (AC-05)
 
 ## 4. Auditoría y documentación
 
-- [ ] 4.1 Auditar y avisar al manager de cada intento bloqueado y verificar con una prueba (AC-06)
-- [ ] 4.2 Agregar la amenaza "agente que lanza agentes para esquivar un bloqueo" a `docs/architecture/security.md` y verificar que enlaza a SEC-15..17
+- [x] 4.1 Auditar y avisar al manager de cada intento bloqueado y verificar con una prueba (AC-06)
+- [x] 4.2 Agregar la amenaza "agente que lanza agentes para esquivar un bloqueo" a `docs/architecture/security.md` y verificar que enlaza a SEC-15..17
