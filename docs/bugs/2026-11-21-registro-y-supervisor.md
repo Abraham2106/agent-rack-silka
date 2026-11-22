@@ -276,3 +276,18 @@ En la terminal del panel, un hub sano en un puerto libre se quedó vivo más de 
 - **Prueba real:** `node scripts/e2e-task-cycle.mjs --escenarios entrega,vacio --max-sesiones 1` (agent-rack real
   con tope 1, dos tareas): la segunda esperó, un solo aviso de tope en el log, luego "vuelve a tener cupo" y
   ambas terminaron con su ficha correcta.
+
+## Reusar el id de una tarea descartada (punto 6 del plan)
+
+**Síntoma:** relanzar con el id de una tarea descartada daba `E_CONFLICT: La tarea X ya existe.`, sin decir que
+estaba descartada ni qué hacer (por eso los relanzamientos usaron `-2`, `-3`).
+
+**Arreglo:**
+- Mensaje claro: si la vieja está descartada, lo dice y propone otro id (`X-2`) o reemplazarla; si está viva,
+  dice su estado y que solo una descartada se puede reemplazar. Un plan que repite un id también se rechaza con
+  motivo.
+- Reemplazo explícito: `silka task run --reemplazar` o `replaceDiscarded: true` en `silka.launch` (con
+  `isolate: 'worktree'`). La vieja se conserva con su historial como `X~reemplazada-<n>` (`replacedBy: X`) y se
+  limpian restos de su worktree o rama.
+- Pruebas: `test/task-ids.test.mjs`. Prueba real: `e2e:ciclo --escenarios entrega` y `e2e:worktree` OK después
+  del cambio (no ejercitan el reemplazo en sí; el reemplazo solo se probó con pruebas automáticas).

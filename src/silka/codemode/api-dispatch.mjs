@@ -106,6 +106,7 @@ export function createApiDispatcher(ctx) {
           callHub: ctx.callHub,
           defaultAgent: opts.agent,
           defaultModel: opts.model,
+          replaceDiscarded: Boolean(opts.replaceDiscarded),
         });
       }
       const launched = [];

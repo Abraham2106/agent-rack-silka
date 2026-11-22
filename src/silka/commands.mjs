@@ -26,6 +26,8 @@ export function parseArgs(argv) {
       flags.workspace = arg.slice('--workspace='.length);
     } else if (arg === '--now') {
       flags.now = true;
+    } else if (arg === '--reemplazar') {
+      flags.reemplazar = true;
     } else {
       positional.push(arg);
     }

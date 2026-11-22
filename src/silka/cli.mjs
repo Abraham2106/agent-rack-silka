@@ -22,7 +22,7 @@ function printHelp() {
   silka disconnect <claude|codex|cursor|opencode|all> [--dry-run]
   silka graph status [workspace]
   silka graph build [workspace]
-  silka task run <archivo-plan> [--workspace dir]
+  silka task run <archivo-plan> [--workspace dir] [--reemplazar]
   silka plan status <planId> [workspace]
   silka task ls [workspace]
   silka task verify <id> [workspace]
@@ -150,7 +150,7 @@ ${agent}  (${cat.models.length}${cat.total > cat.models.length ? ` de ${cat.tota
     const workspace = flags.workspace || process.cwd();
     if (sub === 'run') {
       const planFile = positional[0];
-      if (!planFile) throw new Error('Uso: silka task run <archivo-plan> [--workspace dir]');
+      if (!planFile) throw new Error('Uso: silka task run <archivo-plan> [--workspace dir] [--reemplazar]');
       const { withClient } = await import('./hub.mjs');
       const { createHubCallAdapter } = await import('./tasks/hub-call.mjs');
       const { loadSilkaConfig } = await import('./hub.mjs');
@@ -162,6 +162,7 @@ ${agent}  (${cat.models.length}${cat.total > cat.models.length ? ` de ${cat.tota
           callHub: createHubCallAdapter(client),
           defaultAgent: agents[0] || 'codex',
           defaultModel: def || '',
+          replaceDiscarded: Boolean(flags.reemplazar),
         });
       });
       return;

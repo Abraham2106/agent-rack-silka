@@ -86,6 +86,8 @@ export interface LaunchOptions {
   isolate?: 'worktree';
   /** Límite de tareas concurrentes cuando `isolate` es `worktree`. */
   maxConcurrentTasks?: number;
+  /** Con `isolate: 'worktree'`: si un id es de una tarea descartada, la reemplaza (la vieja queda como `<id>~reemplazada-<n>`). */
+  replaceDiscarded?: boolean;
 }
 
 export interface WaitOptions {

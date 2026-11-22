@@ -186,7 +186,12 @@ export class TaskManager {
     return validateTaskList(items, { repoRoot: this.repoRoot });
   }
 
-  registerPlan(specs, { cause } = {}) {
+  /**
+   * Registra las tareas del plan. Un id ya usado da E_CONFLICT con un mensaje claro; si la tarea
+   * vieja está descartada y se pide `replace` (`--reemplazar`, `replaceDiscarded`), la vieja se
+   * conserva renombrada (`<id>~reemplazada-<n>`, con su historial) y el id queda libre.
+   */
+  registerPlan(specs, { cause, replace = false } = {}) {
     const normalized = specs.map((s) => normalizeTaskInput(s, {
       id: s.id || newTaskId(),
       repoRoot: this.repoRoot,
@@ -194,9 +199,23 @@ export class TaskManager {
     }));
     const created = [];
     mutateTaskStore(this.repoRoot, (store) => {
+      const seen = new Set();
       for (const spec of normalized) {
-        if (store.tasks.some((t) => t.id === spec.id)) {
-          throw silkaError('E_CONFLICT', `La tarea ${spec.id} ya existe.`);
+        if (seen.has(spec.id)) throw silkaError('E_CONFLICT', `El plan repite el id ${spec.id}: cada tarea necesita un id propio.`);
+        seen.add(spec.id);
+        const old = store.tasks.find((t) => t.id === spec.id);
+        if (old && old.state === STATES.DESCARTADA && replace) {
+          let n = 1;
+          while (store.tasks.some((t) => t.id === `${spec.id}~reemplazada-${n}`)) n += 1;
+          old.id = `${spec.id}~reemplazada-${n}`;
+          old.replacedBy = spec.id;
+        } else if (old && old.state === STATES.DESCARTADA) {
+          throw silkaError('E_CONFLICT', `El id ${spec.id} es de una tarea descartada; los ids no se reusan solos. `
+            + `Usa otro id (p. ej. ${spec.id}-2) o relánzala reemplazando la descartada: `
+            + '`silka task run --reemplazar` o `replaceDiscarded: true` en silka.launch.');
+        } else if (old) {
+          throw silkaError('E_CONFLICT', `Ya hay una tarea ${spec.id} (estado: ${old.state}). Usa otro id; `
+            + 'solo una tarea descartada se puede reemplazar.');
         }
         const needsDeps = (spec.dependsOn || []).length > 0;
         const row = {
@@ -221,6 +240,8 @@ export class TaskManager {
       if (this.maxConcurrent) store.maxConcurrentTasks = this.maxConcurrent;
       return store;
     });
+    // Restos del worktree o la rama de la tarea reemplazada no deben impedir crear los nuevos.
+    if (replace) for (const row of created) removeTaskWorktree(this.repoRoot, row.id);
     return created;
   }
 
@@ -231,7 +252,7 @@ export class TaskManager {
   async launch(specs, opts = {}) {
     const manual = opts.manual ?? !opts.callHub;
     this.preferManual = manual;
-    const rows = this.registerPlan(specs, { cause: opts.cause || 'launch' });
+    const rows = this.registerPlan(specs, { cause: opts.cause || 'launch', replace: Boolean(opts.replaceDiscarded) });
     try { registerTaskRepo(this.repoRoot); } catch { /* el registro no frena el lanzamiento */ }
     this.schedule({ manual });
     this.warnDiskIfNeeded();
