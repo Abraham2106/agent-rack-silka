@@ -6,6 +6,7 @@ import { getTask, mutateTaskStore } from '../tasks/store.mjs';
 import { appendReviewAudit } from './audit.mjs';
 import { inboxItemFromTask, listInbox } from './inbox.mjs';
 import { assertCanApprove } from './policy.mjs';
+import { assertReviewNotPending } from './auto.mjs';
 
 function nowIso() {
   return new Date().toISOString();
@@ -76,6 +77,8 @@ export function createReviewService(workspace, opts = {}) {
         assertCanApprove(task.card, actor, {
           requireHumanForMedium: opts.requireHumanForMedium,
         });
+        // review-guardrails: no se aprueba mientras el revisor sigue; su hallazgo podría cambiar la decisión.
+        assertReviewNotPending(task.card);
         recordTransition(task, STATES.APROBADA, 'revision_aprobar');
         recordTransition(task, STATES.COLA_MEZCLA, 'cola_mezcla_f4');
         task.lastReview = { action: 'approve', seenVersion, at: nowIso(), actor };

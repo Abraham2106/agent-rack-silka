@@ -18,6 +18,25 @@ function enteredAt(task) {
   return task.createdAt || '';
 }
 
+/**
+ * review-guardrails: revisión automática para la bandeja. Sin revisión (desactivada o nunca
+ * lanzada) es null; una fallida se marca "sin revisión automática" y no lleva hallazgos.
+ */
+export function reviewSummary(review) {
+  if (!review) return null;
+  const status = review.status || 'desconocida';
+  const findings = (review.findings || []).map((f) => ({ severity: f.severity, file: f.file, motivo: f.motivo }));
+  return {
+    status,
+    sinRevision: status === 'fallida' || status === 'desactivada',
+    reviewer: review.reviewer || null,
+    model: review.model || null,
+    reason: review.reason || '',
+    findings,
+    worktreeAlterado: Boolean(review.worktreeAlterado),
+  };
+}
+
 /** Ficha de bandeja: sin diff completo (FR-RV-05). */
 export function inboxItemFromTask(task) {
   if (!task?.card) return null;
@@ -46,6 +65,7 @@ export function inboxItemFromTask(task) {
       removed: card.diff?.removed ?? 0,
     },
     verifyRef: card.verify?.ref,
+    review: reviewSummary(card.review),
     enteredAt: enteredAt(task),
     sessionId: task.sessionId || null,
   };

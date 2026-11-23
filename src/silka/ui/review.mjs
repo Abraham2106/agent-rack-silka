@@ -30,7 +30,9 @@ export function formatInboxRow(item, { selected = false, width = 96 } = {}) {
   const risk = String(item.risk || '?');
   const gates = String(item.gates || '?');
   const stats = item.diffStats ? `+${item.diffStats.added}/-${item.diffStats.removed}` : '';
-  const head = `${selected ? '▸' : ' '} ${risk.padEnd(5)} ${gates} v${item.version} ${stats} `;
+  const rv = item.review;
+  const revTag = !rv ? '' : rv.sinRevision ? 'rv:— ' : rv.findings?.length ? `rv:${rv.findings.length}${rv.findings.some((f) => f.severity === 'grave') ? '!' : ''} ` : 'rv:0 ';
+  const head = `${selected ? '▸' : ' '} ${risk.padEnd(5)} ${gates} v${item.version} ${stats} ${revTag}`;
   const title = clip(item.title || item.id, Math.max(8, width - head.length));
   return head + title;
 }
@@ -66,6 +68,20 @@ export function reviewDetailLines(workspace, item, { logMax = 14, transcriptMax 
   }
   const stats = item.diffStats;
   if (stats) lines.push(`diff (resumen): +${stats.added} -${stats.removed}`);
+
+  // review-guardrails: revisión automática con sus hallazgos (dato, ya escapado).
+  const review = item.review;
+  if (review) {
+    if (review.sinRevision) {
+      lines.push(`sin revisión automática${review.reason ? `: ${clip(review.reason, 160)}` : ''}`);
+    } else {
+      lines.push(`revisión automática (${review.reviewer || '?'}${review.model ? ` ${review.model}` : ''}): ${review.findings.length} hallazgo(s)`);
+    }
+    if (review.worktreeAlterado) lines.push('aviso: el revisor tocó el worktree; su revisión se descartó');
+    for (const f of (review.findings || []).slice(0, 10)) {
+      lines.push(`  [${f.severity}] ${clip(f.file, 60)} — ${clip(f.motivo, 110)}`);
+    }
+  }
 
   if (item.id && !String(item.id).startsWith('wave:')) {
     const task = getTask(workspace, item.id);
