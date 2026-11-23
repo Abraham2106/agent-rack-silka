@@ -15,6 +15,7 @@ function printHelp() {
   silka ui
   silka memory add|ls|confirm|expire|replace  (memoria del proyecto; ver --help de memory)
   silka skills ls [--json] [--workspace dir]  (skills por rol en .silka/skills/)
+  silka routing show [--workspace dir]   (tabla efectiva de modelos por rol y tamaño, de .silka/routing.json)
   silka models [agente] [--refresh] [--json]
   silka models default <agente> <modelo>
   silka models filter <agente> [patrón...]   (sin patrones: quita el filtro; --all ignora filtros)

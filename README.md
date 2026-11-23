@@ -229,6 +229,39 @@ npm run -s silka -- doctor          # texto para la terminal
 npm run -s silka -- doctor --json   # JSON para el manager; sale con código 1 si hay alguna falla
 ```
 
+## Configuración, modelos, skills y revisión
+
+Silka prepara el entorno y decide qué agente y qué contexto recibe cada tarea. Todo vive en el repo y se versiona;
+nada toca tu configuración global.
+
+| Qué | Comando | Archivo |
+|---|---|---|
+| Preparar la config de Silka (vista previa; `--apply` escribe solo en la carpeta de Silka) | `silka setup [--apply]` | `~/.config/silka/` |
+| Enrutar modelos por rol (planificar, implementar, revisar) y tamaño de tarea | `silka routing show` | `.silka/routing.json` |
+| Skills por rol (implementador, revisor, verificador) inyectadas con tope de tamaño | `silka skills ls` | `.silka/skills/<rol>/*.md` |
+| Memoria del proyecto: decisiones, aprendizajes y preferencias que se inyectan por alcance | `silka memory add\|ls` | `.silka/decisions.jsonl` |
+| Revisión automática acotada antes de la bandeja (desactivada por defecto) | `silka review ls` | `.silka/review.json` con `"enabled": true` |
+
+La revisión automática la hace un agente distinto del implementador, que solo lee el diff y la spec de la tarea y
+no puede escribir en el worktree. Un hallazgo grave sube el riesgo de la ficha a alto y la aprobación espera a que
+termine la revisión.
+
+Los agentes que lanza Silka no pueden crear otros agentes, no ven las demás tareas y no reciben `.env`, llaves ni
+`~/.ssh` (ver [Seguridad](#seguridad)).
+
+## Evals
+
+`evals/` contiene una suite pequeña de calidad con un piso de precisión que sale con código 1 si no se alcanza, de
+modo que sirve como puerta de merge. Por defecto usa un modelo falso y no necesita red ni gasta nada.
+
+```bash
+npm run evals           # suite completa
+npm run evals:smoke     # subconjunto que bloquea un pull request
+```
+
+Cómo se aplican y qué está implementado hoy frente a lo que viene después: [docs/evals.md](docs/evals.md). El
+benchmark de tokens del manager es otra cosa: [docs/benchmarks/README.md](docs/benchmarks/README.md).
+
 ## Problemas comunes
 
 | Síntoma | Solución |
