@@ -123,10 +123,14 @@ export function buildReport({ date, commit, tasksHash, models, solo, silka, limi
   return lines.join('\n');
 }
 
-/** Guarda el informe en docs/benchmarks/<fecha>.md y devuelve la ruta. */
+/**
+ * Guarda el informe en docs/benchmarks/<fecha>.md y devuelve la ruta. Si ese archivo ya existe
+ * (otra corrida del mismo día), usa <fecha>-2.md, -3.md...: nunca sobrescribe un informe anterior.
+ */
 export function writeReport(dir, date, markdown) {
   fs.mkdirSync(dir, { recursive: true });
-  const file = path.join(dir, `${date}.md`);
+  let file = path.join(dir, `${date}.md`);
+  for (let n = 2; fs.existsSync(file); n += 1) file = path.join(dir, `${date}-${n}.md`);
   fs.writeFileSync(file, markdown, 'utf8');
   return file;
 }
