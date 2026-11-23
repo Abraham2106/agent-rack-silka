@@ -1,6 +1,7 @@
 node_modules/
 sandbox/
-.silka/
+.silka/*
+!.silka/skills/
 graphify-out/
 shims/logs/
 smoke-*.txt
