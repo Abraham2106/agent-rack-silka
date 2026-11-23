@@ -48,5 +48,9 @@ Estabilización de la plataforma y cierre de huecos frente a herramientas pareci
 - El cambio `bridge-code-mode-only` sigue sin implementar (0 de 7 tareas).
 - El modo solo lectura del revisor se pasa al hub, pero no está verificado que cada agente lo aplique; la
   garantía real es la comprobación de que el worktree quedó igual.
+- El adaptador de modelo real de `evals/` (OpenCode) no funciona en Windows: `spawnSync('opencode')` falla con
+  ENOENT, así que solo se ha ejecutado con el modelo falso. Hay que lanzarlo con shell, pasar el prompt por stdin y
+  matar el árbol por PID al vencer el tiempo; la salida real trae el texto en `part.text` y el uso en
+  `step_finish.part.tokens`.
 - Cursor no se puede comprobar desde Silka (no carga el MCP en modo headless en la máquina de desarrollo).
 - Un agente con shell todavía podría invocar la CLI `agent-rack` directamente.
