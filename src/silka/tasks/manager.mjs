@@ -35,6 +35,7 @@ import { integrationBlockedReason } from '../integration/runner.mjs';
 import { recordDeliveryMetricIfClosed } from '../metrics/task-close.mjs';
 import { deleteSessionNotes } from '../notes.mjs';
 import { memoryPrefix, noteTaskFailure, seedMemory } from '../memory.mjs';
+import { skillsPrefix } from '../skills.mjs';
 
 function nowIso() {
   return new Date().toISOString();
@@ -344,7 +345,10 @@ export class TaskManager {
       }
       if (sessionLimitActive()) continue;
       // agent-memory: solo entradas vigentes del alcance de esta tarea, antes del encargo.
-      const prompt = memoryPrefix(this.repoRoot, task.scope) + agentPrompt(task);
+      // role-skills: skills del rol de la tarea y su alcance, con tope propio (nunca impiden lanzar).
+      const prompt = memoryPrefix(this.repoRoot, task.scope)
+        + skillsPrefix(this.repoRoot, { taskRole: task.role, scope: task.scope })
+        + agentPrompt(task);
       if (!prompt.trim()) throw silkaError('E_POLICY', `La tarea ${task.id} no tiene prompt.`);
       // model-routing: explícito de la tarea, luego la tabla .silka/routing.json, luego el defecto.
       // Una tabla inválida falla esta tarea (queda en startError) sin lanzarla con esa tabla.
