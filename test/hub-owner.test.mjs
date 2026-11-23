@@ -37,7 +37,8 @@ const nextPort = () => { port += 1; return port; };
 
 test('BUG-04: un segundo hub no puede reclamar el puerto mientras el primero vive', async () => {
   const p = nextPort();
-  const first = runChild(`console.log(JSON.stringify(o.claimHubOwnership(${p})));`, { keepAliveMs: 30_000 });
+  // El dueño vive hasta que la prueba lo mata; el plazo de 2 min solo evita procesos huérfanos.
+  const first = runChild(`console.log(JSON.stringify(o.claimHubOwnership(${p})));`, { keepAliveMs: 120_000 });
   assert.match(await first.firstLine, /"ok":true/);
   const second = claimHubOwnership(p);
   assert.equal(second.ok, false);
@@ -65,7 +66,9 @@ test('BUG-04: dueño con pid muerto o reutilizado no cuenta como vivo', () => {
 
 test('BUG-04: varios hubs que arrancan a la vez → exactamente uno reclama el puerto', async () => {
   const p = nextPort();
-  const kids = Array.from({ length: 6 }, () => runChild(`console.log(JSON.stringify(o.claimHubOwnership(${p})));`, { keepAliveMs: 15_000 }));
+  // Cada perdedor consulta al dueño (PowerShell, hasta 8 s) dentro del candado: bajo carga, 6 hijos
+  // tardan más de 15 s en turnarse. El ganador debe seguir vivo hasta que todos hayan respondido.
+  const kids = Array.from({ length: 6 }, () => runChild(`console.log(JSON.stringify(o.claimHubOwnership(${p})));`, { keepAliveMs: 120_000 }));
   const results = await Promise.all(kids.map((k) => k.firstLine));
   assert.equal(results.filter((r) => /"ok":true/.test(r)).length, 1, results.join('\n'));
   for (const k of kids) k.child.kill();
