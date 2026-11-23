@@ -14,6 +14,7 @@ function printHelp() {
   silka note <id> "<texto>"
   silka ui
   silka memory add|ls|confirm|expire|replace  (memoria del proyecto; ver --help de memory)
+  silka skills ls [--json] [--workspace dir]  (skills por rol en .silka/skills/)
   silka models [agente] [--refresh] [--json]
   silka models default <agente> <modelo>
   silka models filter <agente> [patrón...]   (sin patrones: quita el filtro; --all ignora filtros)
@@ -270,6 +271,12 @@ ${agent}  (${cat.models.length}${cat.total > cat.models.length ? ` de ${cat.tota
   if (cmd === 'memory') {
     const { memoryCommand } = await import('./memory.mjs');
     memoryCommand(argv.slice(1), process.cwd());
+    return;
+  }
+  if (cmd === 'skills') {
+    // role-skills: `silka skills ls [--json]` lista las skills por rol con su alcance y tamaño.
+    const { skillsCommand } = await import('./skills.mjs');
+    skillsCommand(argv.slice(1), process.cwd());
     return;
   }
   if (cmd === 'doctor') {

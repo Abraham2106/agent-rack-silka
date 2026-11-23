@@ -206,16 +206,28 @@ export function relevanceScore(tags, scopes) {
  * (por defecto 2 KB) queda en `rest` y se cita por referencia, no como texto.
  */
 export function selectMemory(workspace, scope = [], { budget = MEMORY_BUDGET_BYTES } = {}) {
+  return selectByScope(readVigentDecisions(workspace), scope, {
+    budget,
+    lineOf: (entry) => `- [${entry.type}] ${oneLine(entry.text, 600)}\n`,
+  });
+}
+
+/**
+ * Selección acotada por alcance, compartida con role-skills (src/silka/skills.mjs). `entries` llevan
+ * `tags` y `at`; `lineOf` da el texto que ocupa cada entrada dentro del tope. Devuelve las que caben
+ * (`picked`) y el resto (`rest`), por relevancia y luego por fecha descendente.
+ */
+export function selectByScope(entries, scope = [], { budget = MEMORY_BUDGET_BYTES, lineOf } = {}) {
   const scopes = [scope].flat().map(String).filter(Boolean);
-  const ranked = readVigentDecisions(workspace)
+  const ranked = entries
     .map((entry) => ({ entry, score: relevanceScore(entry.tags, scopes) }))
     .filter((item) => item.score > 0)
-    .sort((a, b) => (b.score - a.score) || b.entry.at.localeCompare(a.entry.at));
+    .sort((a, b) => (b.score - a.score) || String(b.entry.at || '').localeCompare(String(a.entry.at || '')));
   const picked = [];
   const rest = [];
   let used = 0;
   for (const { entry } of ranked) {
-    const bytes = Buffer.byteLength(`- [${entry.type}] ${oneLine(entry.text, 600)}\n`, 'utf8');
+    const bytes = Buffer.byteLength(lineOf(entry), 'utf8');
     if (used + bytes <= budget) {
       picked.push(entry);
       used += bytes;
