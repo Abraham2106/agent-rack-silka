@@ -7,6 +7,7 @@ import { createTaskManager } from './manager.mjs';
 import { readTaskStore } from './store.mjs';
 import { listTaskRepos } from './repo-registry.mjs';
 import { STATES } from './states.mjs';
+import { runAutoReviews } from '../review/auto.mjs';
 
 function repoRootsToWatch() {
   const { root } = loadSilkaConfig();
@@ -109,6 +110,8 @@ export async function superviseTasksOnce(client, { repoRoots, defaultAgent = 'co
     }
     // eslint-disable-next-line no-await-in-loop
     n += await mgr.dispatchPendingRepairs({ callHub, log });
+    // review-guardrails: revisión automática de las fichas en revisión (no bloquea ni lanza).
+    n += await runAutoReviews({ repoRoot, callHub, byId, defaultAgent, defaultModel, log });
   }
   return n;
 }

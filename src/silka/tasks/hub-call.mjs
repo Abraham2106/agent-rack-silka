@@ -1,6 +1,17 @@
 /** Adapta el cliente del hub al contrato callHub de Code Mode. */
 export function createHubCallAdapter(client) {
   return async function callHub(name, args = {}) {
+    if (name === 'agent_session_create' && args.mode) {
+      // review-guardrails: el revisor pide modo de solo lectura; el hub lo aplica por agente.
+      const text = await client.callTool('agent_session_create', {
+        agent: args.agent,
+        prompt: args.prompt,
+        workspace: args.workspace,
+        ...(args.model ? { model: args.model } : {}),
+        mode: args.mode,
+      });
+      return { content: [{ type: 'text', text: typeof text === 'string' ? text : JSON.stringify(text ?? {}) }] };
+    }
     if (name === 'agent_session_create') {
       const created = await client.createSession(
         args.agent,

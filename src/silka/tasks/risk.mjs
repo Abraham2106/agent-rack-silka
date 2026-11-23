@@ -26,11 +26,13 @@ export function isSensitivePath(file) {
  * FR-TK-06: alto si verify falla, fuera de scope, sensibles, o >400 líneas;
  * medio si >120 líneas; si no, bajo.
  */
-export function assessRisk({ verifyOk, files, outOfScope, diffLines, allowNoVerify, denylist = DEFAULT_SECRET_DENYLIST }) {
+export function assessRisk({ verifyOk, files, outOfScope, diffLines, allowNoVerify, denylist = DEFAULT_SECRET_DENYLIST, reviewFindings }) {
   const lines = Number(diffLines) || 0;
   const sens = (files || []).filter(isSensitivePath);
   // SEC-17: tocar un archivo de la lista de denegación es riesgo alto aunque no sea "sensible".
   const denied = deniedFiles(files, denylist);
+  // review-guardrails (RG-05): un hallazgo `grave` de la revisión automática sube el riesgo a alto.
+  const graveReview = (reviewFindings || []).some((f) => f?.severity === 'grave');
   const reasons = [];
   if (allowNoVerify) reasons.push('sin_verify_declarado');
   if (!verifyOk) reasons.push('verify_falló');
@@ -38,8 +40,9 @@ export function assessRisk({ verifyOk, files, outOfScope, diffLines, allowNoVeri
   if (sens.length) reasons.push('archivos_sensibles');
   if (denied.length) reasons.push('archivos_denegados');
   if (lines > 400) reasons.push('diff_grande');
+  if (graveReview) reasons.push('revision_automatica');
   let level = 'bajo';
-  if (allowNoVerify || !verifyOk || outOfScope?.length || sens.length || denied.length || lines > 400) level = 'alto';
+  if (allowNoVerify || !verifyOk || outOfScope?.length || sens.length || denied.length || lines > 400 || graveReview) level = 'alto';
   else if (lines > 120) level = 'medio';
   return {
     level,

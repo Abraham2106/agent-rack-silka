@@ -51,6 +51,8 @@ export function buildDeliveryCard(task, {
     routing: task.routing || null,
     risk: risk.level,
     riskDetail: risk,
+    // review-guardrails: lo rellena review/auto.mjs cuando la revisión automática está activada.
+    review: null,
     gates: allOk ? 'pass' : 'fail',
     version: task.version,
     baseCommit: task.baseCommit,

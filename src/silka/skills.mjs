@@ -105,8 +105,12 @@ function skillBlock(skill) {
  * Vacío si no hay nada aplicable o si algo falla (nunca impide lanzar).
  */
 export function skillsPrefix(workspace, { taskRole, scope = [] } = {}) {
+  return skillsPrefixForRole(workspace, skillRoleForTask(taskRole), scope);
+}
+
+/** Mismo bloque para un rol de skill directo (p. ej. `revisor` o `verificador` en la revisión). */
+export function skillsPrefixForRole(workspace, role, scope = []) {
   try {
-    const role = skillRoleForTask(taskRole);
     if (!role) return '';
     const candidates = readSkills(workspace).valid.filter((skill) => skill.role === role);
     if (!candidates.length) return '';
