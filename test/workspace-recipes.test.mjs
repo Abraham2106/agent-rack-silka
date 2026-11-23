@@ -50,13 +50,27 @@ function writeRecipe(repo, recipe) {
   fs.writeFileSync(path.join(repo, 'silka.json'), `${JSON.stringify(recipe, null, 2)}\n`);
 }
 
-async function waitFor(fn, ms = 15_000) {
+// Espera por condición; el plazo es holgado porque solo se agota si algo de verdad no pasa
+// (bajo carga, un servidor de node tarda varios segundos en escuchar).
+async function waitFor(fn, ms = 60_000) {
   const until = Date.now() + ms;
   while (Date.now() < until) {
     if (fn()) return true;
     await new Promise((r) => setTimeout(r, 150));
   }
   return false;
+}
+
+/** Puerto efímero libre del sistema: nada de rangos fijos que otra suite pueda estar usando. */
+function ephemeralPort() {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.once('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      const { port } = srv.address();
+      srv.close(() => resolve(port));
+    });
+  });
 }
 
 // --- WR-01: esquema de la receta y variantes ------------------------------------------------
@@ -309,7 +323,9 @@ for (const shell of ['cmd', 'pwsh']) {
     const repo = initRepo();
     const id = `wr-run-${shell}`;
     const wt = createTaskWorktree(repo, id, headCommit(repo), { denylist: [] }).worktreePath;
-    const ports = allocatePorts(repo, id, 1);
+    // Puerto efímero propio: el rango de allocatePorts es compartido entre suites y dos pruebas
+    // paralelas podían recibir el mismo puerto.
+    const ports = [await ephemeralPort()];
     try {
       // shell -> node: el servidor es nieto del shell, así que el cierre tiene que alcanzarlo por el árbol.
       // pwsh se prueba aparte: con `detached` en Windows, powershell.exe muere al lanzarlo (ya corregido).
@@ -327,8 +343,10 @@ for (const shell of ['cmd', 'pwsh']) {
 
       const stopped = stopWorkspaceRun(wt, 'dev', { ports });
       assert.equal(stopped.stopped, true);
-      assert.equal(stopped.portsFree, true, 'el puerto queda libre tras el cierre');
       assert.equal(isPidAlive(pid), false, 'el proceso del run ya no vive');
+      // El árbol muere al instante, pero el socket del servidor se cierra un poco después: el
+      // puerto queda libre por condición, no en la lectura inmediata de stopWorkspaceRun.
+      assert.ok(await waitFor(() => portsAreFree(ports)), 'el puerto queda libre tras el cierre');
     } finally {
       stopWorkspaceRun(wt, 'dev', { ports });
       releasePorts(repo, id);
