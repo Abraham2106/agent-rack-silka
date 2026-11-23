@@ -7,7 +7,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { managerUsageFromClaudeJson, opencodeUsageFromJsonl } from './usage.mjs';
 import { buildQualityRecord, outOfScopeCount } from './quality.mjs';
@@ -17,6 +17,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..');
 export const TASKS_FILE = path.join(here, 'tasks.json');
 export const REPORTS_DIR = path.join(repoRoot, 'docs', 'benchmarks');
+export const BENCH_PREFIX = 'silka-bench-';
+export const OPENCODE_TIMEOUT_MS = 15 * 60 * 1000;
 export const SILKA_HINT =
   'Para esta tarea delega el trabajo de código con la API de Silka (silka_execute) en vez de editar archivos tú mismo. ' +
   'Resume el resultado en una línea.';
@@ -41,6 +43,21 @@ export function silkaCallsLimit(silkaResults) {
   ];
 }
 
+/** Límites de una corrida por tareas inválidas (el repo principal se tocó) o con tope de tiempo alcanzado. */
+export function runLimits(results) {
+  const out = [];
+  const invalid = results.filter((r) => r.invalid);
+  if (invalid.length > 0) {
+    const list = invalid.map((r) => `${r.taskId} (${r.path}): ${r.invalid}`).join('; ');
+    out.push(`Tareas inválidas, sin calidad medida: ${list}. Sus tokens sí se gastaron y están contados.`);
+  }
+  const timed = results.filter((r) => r.timedOut);
+  if (timed.length > 0) {
+    out.push(`${timed.length} corridas llegaron al tope de ${OPENCODE_TIMEOUT_MS / 60000} minutos y se cerraron: su uso puede ser parcial.`);
+  }
+  return out;
+}
+
 const USAGE = `Uso: node scripts/benchmark/run.mjs [--confirmar-gasto] [--proveedor claude|opencode] [--modelo-solo m] [--modelo-silka m]
 
 Corre las tareas de scripts/benchmark/tasks.json por el camino solo y por el camino con Silka,
@@ -60,16 +77,110 @@ export function loadTasks(file = TASKS_FILE) {
   return { tasks, hash: crypto.createHash('sha256').update(raw).digest('hex') };
 }
 
+// ---------------------------------------------------------------------------
+// Procesos: cada comando se corre con su PID de Node y su árbol se cierra con taskkill /T.
+// ---------------------------------------------------------------------------
+
+/** Argumentos de taskkill para cerrar el árbol de un PID de Windows (nunca se usa ps). */
+export function killTreeArgs(pid) {
+  return ['/PID', String(pid), '/T', '/F'];
+}
+
+export function killProcessTree(pid) {
+  if (!pid) return false;
+  if (process.platform === 'win32') {
+    return spawnSync('taskkill', killTreeArgs(pid), { encoding: 'utf8', windowsHide: true }).status === 0;
+  }
+  try {
+    process.kill(pid, 'SIGKILL');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Corre un comando de shell y devuelve su salida. Si vence el tiempo, cierra el árbol de su PID. */
+export function runProcess(cmd, { cwd, env, timeoutMs = OPENCODE_TIMEOUT_MS } = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, { cwd, env, shell: true, windowsHide: true });
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killProcessTree(child.pid);
+    }, timeoutMs);
+    child.stdout.on('data', (d) => { stdout += d; });
+    child.stderr.on('data', (d) => { stderr += d; });
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      resolve({ status: null, stdout, stderr: `${stderr}${err.message}`, timedOut });
+    });
+    child.on('close', (status) => {
+      clearTimeout(timer);
+      resolve({ status, stdout, stderr, timedOut });
+    });
+  });
+}
+
+/** Cuenta los procesos opencode.exe del sistema (solo para registrar si quedó alguno al terminar). */
+export function countOpencodeProcesses() {
+  if (process.platform !== 'win32') return null;
+  const r = spawnSync('tasklist', ['/FI', 'IMAGENAME eq opencode.exe', '/NH'], { encoding: 'utf8', windowsHide: true });
+  if (r.status !== 0) return null;
+  return r.stdout.split(/\r?\n/).filter((l) => /opencode\.exe/i.test(l)).length;
+}
+
+// ---------------------------------------------------------------------------
+// Repo principal: el agente no debe tocarlo. Si lo toca, la tarea es inválida.
+// ---------------------------------------------------------------------------
+
+function gitOut(args, cwd) {
+  const r = spawnSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  return r.status === 0 ? r.stdout : null;
+}
+
+/** true si el árbol del repo tiene cambios (tracked o sin rastrear, sin contar ignorados). */
+export function repoTouched(repo) {
+  const status = gitOut(['status', '--porcelain'], repo);
+  return status == null ? true : status.trim() !== '';
+}
+
+/**
+ * Guarda los cambios del repo en un parche y lo deja limpio (HEAD). Solo se usa cuando la tarea es
+ * inválida: el repo estaba limpio al empezar (gitClean), así que lo único que se quita es lo que el agente escribió.
+ */
+export function restoreRepo(repo, patchFile) {
+  const diff = gitOut(['diff', 'HEAD', '--binary'], repo) ?? '';
+  const untracked = gitOut(['ls-files', '--others', '--exclude-standard'], repo) ?? '';
+  fs.writeFileSync(patchFile, `${diff}\n# sin rastrear:\n${untracked}`, 'utf8');
+  spawnSync('git', ['reset', '--hard', 'HEAD'], { cwd: repo, encoding: 'utf8' });
+  spawnSync('git', ['clean', '-fd'], { cwd: repo, encoding: 'utf8' });
+  return patchFile;
+}
+
+// ---------------------------------------------------------------------------
+// Corrida por tarea y camino.
+// ---------------------------------------------------------------------------
+
 /**
  * Corre una tarea por un camino. `runner` devuelve la salida del manager y el resultado del verify.
- * Las cifras de calidad que el runner no pueda medir quedan en null (sin dato).
+ * Si tras correr el agente el repo principal quedó con cambios, la tarea se marca inválida:
+ * se guarda el parche, se restaura el repo y no cuenta calidad (los tokens gastados sí cuentan).
  */
-async function runOne({ path: pathName, task, commit, runner, workdirFor, model }) {
+async function runOne({ path: pathName, task, commit, runner, workdirFor, model, repo }) {
   const { dir, cleanup } = await workdirFor(pathName, commit, task);
   try {
     const out = await runner(task, { workdir: dir, commit, path: pathName });
     // Cada runner puede traer su propio uso (OpenCode); si no, se lee el JSON de `claude -p`.
     const usage = out.usage ?? managerUsageFromClaudeJson(out.stdout);
+    const base = { taskId: task.id, path: pathName, usage, silkaCalls: out.silkaCalls ?? null, timedOut: Boolean(out.timedOut) };
+    if (repo && repoTouched(repo)) {
+      const patch = path.join(os.tmpdir(), `bench-invalida-${pathName}-${task.id}-${Date.now()}.patch`);
+      restoreRepo(repo, patch);
+      const { quality, sources } = buildQualityRecord({ id: task.id, agent: pathName === 'solo' ? 'manager-solo' : 'manager-silka', model });
+      return { ...base, invalid: `el repo principal quedó con cambios (parche guardado en ${patch})`, quality, sources };
+    }
     const outOfScope = out.changedFiles ? outOfScopeCount(out.changedFiles, task.permitidos) : null;
     const { quality, sources } = buildQualityRecord({
       id: task.id,
@@ -81,7 +192,7 @@ async function runOne({ path: pathName, task, commit, runner, workdirFor, model 
       repairs: out.repairs,
       outOfScope,
     });
-    return { taskId: task.id, usage, quality, sources, silkaCalls: out.silkaCalls ?? null };
+    return { ...base, quality, sources };
   } finally {
     await cleanup();
   }
@@ -98,32 +209,60 @@ async function runOne({ path: pathName, task, commit, runner, workdirFor, model 
  * @param {{solo?: string, silka?: string}} [p.models]
  * @param {Date} [p.now]
  * @param {string[]} [p.extraLimits] límites propios de la corrida (p. ej. proveedor sin aislar)
+ * @param {string} [p.repo] repo principal que el agente no debe tocar (guarda de tareas inválidas)
  */
-export async function runBenchmark({ commit, tasks, tasksHash, runners, workdirFor, models = {}, now = new Date(), extraLimits = [] }) {
+export async function runBenchmark({ commit, tasks, tasksHash, runners, workdirFor, models = {}, now = new Date(), extraLimits = [], repo }) {
   if (!commit) throw new Error('Falta el commit de partida.');
   const date = now.toISOString().slice(0, 10);
   const solo = [];
   const silka = [];
   for (const task of tasks) {
-    solo.push(await runOne({ path: 'solo', task, commit, runner: runners.solo, workdirFor, model: models.solo }));
-    silka.push(await runOne({ path: 'silka', task, commit, runner: runners.silka, workdirFor, model: models.silka }));
+    solo.push(await runOne({ path: 'solo', task, commit, runner: runners.solo, workdirFor, model: models.solo, repo }));
+    silka.push(await runOne({ path: 'silka', task, commit, runner: runners.silka, workdirFor, model: models.silka, repo }));
   }
-  const limits = [...LIMITS, ...extraLimits, ...silkaCallsLimit(silka)];
+  const limits = [...LIMITS, ...extraLimits, ...silkaCallsLimit(silka), ...runLimits([...solo, ...silka])];
   const markdown = buildReport({ date, commit, tasksHash, models: { solo: models.solo, silka: models.silka }, solo, silka, limits });
   return { date, commit, solo, silka, markdown };
+}
+
+/** Carpeta base de las worktrees de la corrida: dentro de allowedWorkspaces, nunca en %TEMP% (ver docs del informe). */
+export function benchBaseDir(repo = repoRoot) {
+  return path.dirname(repo);
 }
 
 /** Worktree temporal, detached en el commit, para que cada corrida parta del mismo código. */
 export function gitWorkdir(repo = repoRoot) {
   return async (pathName, commit, task) => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), `silka-bench-${pathName}-${task.id}-`));
+    const dir = fs.mkdtempSync(path.join(benchBaseDir(repo), `${BENCH_PREFIX}${pathName}-${task.id}-`));
     const add = spawnSync('git', ['worktree', 'add', '--detach', dir, commit], { cwd: repo, encoding: 'utf8' });
     if (add.status !== 0) throw new Error(`No se pudo crear el worktree: ${add.stderr}`);
     const cleanup = async () => {
-      spawnSync('git', ['worktree', 'remove', '--force', dir], { cwd: repo, encoding: 'utf8' });
+      removeWorktree(repo, dir);
     };
     return { dir, cleanup };
   };
+}
+
+/** Quita una worktree de la corrida y su carpeta. Solo borra rutas con el prefijo de la corrida. */
+export function removeWorktree(repo, dir) {
+  if (path.basename(dir).startsWith(BENCH_PREFIX)) {
+    spawnSync('git', ['worktree', 'remove', '--force', dir], { cwd: repo, encoding: 'utf8' });
+    const left = removeDirIfPossible(dir);
+    spawnSync('git', ['worktree', 'prune'], { cwd: repo, encoding: 'utf8' });
+    if (!left) console.error(`No se pudo borrar ${dir}: está en uso. Bórrala a mano cuando cierre el proceso que la usa.`);
+    return left;
+  }
+  return true;
+}
+
+/** Borra una carpeta de la corrida. Devuelve false si Windows la tiene en uso (no lanza). */
+function removeDirIfPossible(dir) {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+    return true;
+  } catch {
+    return !fs.existsSync(dir);
+  }
 }
 
 /** Runner real: `claude -p` con salida JSON (uso reportado por el proveedor). */
@@ -160,38 +299,109 @@ export function countSilkaCalls(stdout) {
 }
 
 /**
- * Runner de OpenCode: `opencode run --format json` con el modelo dado. El uso sale de los eventos
- * step_finish del proveedor (opencodeUsageFromJsonl); nunca se estima. En el camino con Silka se
- * cuentan las llamadas a silka_execute: si son cero, esa corrida no usó Silka.
+ * Config aislada para el camino solo: un XDG_CONFIG_HOME propio con un opencode.json sin MCP.
+ * Así no carga el MCP agent-rack, ni codegraph, ni unityMCP, ni el AGENTS.md global de la config del usuario.
+ * El camino solo corre con `--standalone` (verificado: ese modo no carga MCP y escribe en el cwd).
+ */
+export function isolatedOpencodeConfig() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), `${BENCH_PREFIX}cfg-`));
+  fs.mkdirSync(path.join(root, 'opencode'), { recursive: true });
+  fs.writeFileSync(
+    path.join(root, 'opencode', 'opencode.json'),
+    `${JSON.stringify({ $schema: 'https://opencode.ai/config.json', mcp: {} }, null, 2)}\n`,
+    'utf8',
+  );
+  return root;
+}
+
+/**
+ * Comando de `opencode run` para cada camino. Solo: `--standalone` con config aislada (sin MCP).
+ * Con Silka: el servicio en segundo plano, porque solo ahí se alcanza el MCP agent-rack; ese camino
+ * carga la config global del usuario (agent-rack, codegraph, unityMCP y AGENTS.md). Esa asimetría se declara en el informe.
+ */
+export function opencodeInvocation({ model, silka = false, title, prompt, configDir }) {
+  // Una sola línea y comillas escapadas: el prompt viaja como argumento de la shell.
+  const line = prompt.replace(/\s+/g, ' ').replace(/"/g, '\\"');
+  const standalone = silka ? '' : '--standalone ';
+  const cmd = `opencode run --format json --auto ${standalone}--title "${title}" -m ${model} "${line}"`;
+  const env = silka || !configDir ? { ...process.env } : { ...process.env, XDG_CONFIG_HOME: configDir };
+  return { cmd, env, mode: silka ? 'servicio-global' : 'standalone-config-aislada' };
+}
+
+/**
+ * Runner de OpenCode. El uso sale de los eventos step_finish del proveedor (opencodeUsageFromJsonl);
+ * nunca se estima. Corre con cwd = worktree de la tarea. En el camino con Silka se cuentan las
+ * llamadas a silka_execute: si son cero, esa corrida no usó Silka.
  */
 export function opencodeRunner({ model, silka = false } = {}) {
   return async (task, { workdir, commit }) => {
     const base = `${task.title}. Alcance: ${task.alcance} Entregable: ${task.entregable}`;
     const prompt = silka ? `${base} ${opencodeSilkaHint(workdir, model)}` : base;
-    // Una sola línea y comillas escapadas: el prompt viaja como argumento de la shell.
-    const line = prompt.replace(/\s+/g, ' ').replace(/"/g, '\\"');
-    const cmd = `opencode run --format json --auto --standalone --title "bench-${task.id}-${silka ? 'silka' : 'solo'}" -m ${model} "${line}"`;
-    const run = spawnSync(cmd, { cwd: workdir, encoding: 'utf8', shell: true, maxBuffer: 64 * 1024 * 1024, timeout: 900000 });
-    const check = spawnSync(task.verify, { cwd: workdir, encoding: 'utf8', shell: true });
-    const diff = spawnSync('git', ['diff', '--name-only', commit], { cwd: workdir, encoding: 'utf8' });
-    const changedFiles = diff.status === 0 ? diff.stdout.split(/\r?\n/).filter(Boolean) : null;
-    const stdout = run.stdout || '';
-    return {
-      stdout,
-      usage: opencodeUsageFromJsonl(stdout),
-      silkaCalls: silka ? countSilkaCalls(stdout) : 0,
-      verify: check.status === 0,
-      firstPass: null,
-      repairs: null,
-      mergeBroke: null,
-      changedFiles,
-    };
+    const configDir = silka ? null : isolatedOpencodeConfig();
+    try {
+      const inv = opencodeInvocation({
+        model,
+        silka,
+        title: `bench-${task.id}-${silka ? 'silka' : 'solo'}`,
+        prompt,
+        configDir,
+      });
+      const run = await runProcess(inv.cmd, { cwd: workdir, env: inv.env, timeoutMs: OPENCODE_TIMEOUT_MS });
+      const check = spawnSync(task.verify, { cwd: workdir, encoding: 'utf8', shell: true });
+      const diff = spawnSync('git', ['diff', '--name-only', commit], { cwd: workdir, encoding: 'utf8' });
+      const changedFiles = diff.status === 0 ? diff.stdout.split(/\r?\n/).filter(Boolean) : null;
+      const stdout = run.stdout || '';
+      return {
+        stdout,
+        timedOut: run.timedOut,
+        mode: inv.mode,
+        usage: opencodeUsageFromJsonl(stdout),
+        silkaCalls: silka ? countSilkaCalls(stdout) : 0,
+        verify: check.status === 0,
+        firstPass: null,
+        repairs: null,
+        mergeBroke: null,
+        changedFiles,
+      };
+    } finally {
+      if (configDir) fs.rmSync(configDir, { recursive: true, force: true });
+    }
   };
 }
 
 function gitClean(cwd) {
   const r = spawnSync('git', ['status', '--porcelain'], { cwd, encoding: 'utf8' });
   return r.status === 0 && r.stdout.trim() === '';
+}
+
+/** Carpeta principal del checkout (no la worktree actual): donde vive agent-rack.config.json del usuario. */
+export function mainCheckoutRoot(repo = repoRoot) {
+  const common = gitOut(['rev-parse', '--path-format=absolute', '--git-common-dir'], repo);
+  return common ? path.dirname(common.trim()) : repo;
+}
+
+function sha256File(file) {
+  return fs.existsSync(file) ? crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') : null;
+}
+
+/**
+ * Borra restos de corridas anteriores: carpetas silka-bench-* en %TEMP% y worktrees con el prefijo
+ * en la carpeta base. Nunca toca nada que no empiece por el prefijo.
+ */
+export function sweepBenchLeftovers(repo = repoRoot) {
+  let removed = 0;
+  for (const dir of [os.tmpdir(), benchBaseDir(repo)]) {
+    let names = [];
+    try { names = fs.readdirSync(dir); } catch { continue; }
+    for (const name of names.filter((n) => n.startsWith(BENCH_PREFIX))) {
+      const full = path.join(dir, name);
+      // Si la carpeta es una worktree registrada, git la quita y deja de tenerla en su lista.
+      spawnSync('git', ['worktree', 'remove', '--force', full], { cwd: repo, encoding: 'utf8' });
+      if (removeDirIfPossible(full)) removed += 1;
+    }
+  }
+  spawnSync('git', ['worktree', 'prune'], { cwd: repo, encoding: 'utf8' });
+  return removed;
 }
 
 function arg(name) {
@@ -225,24 +435,45 @@ async function main() {
     console.error('El árbol de trabajo no está limpio: el benchmark debe partir de un commit.');
     return 1;
   }
-  // Solo OpenCode: el camino solo no puede aislarse del MCP agent-rack (config global), así que se declara.
+  // La config del usuario no debe cambiar por correr el benchmark (antes se le añadían rutas temporales).
+  const userConfig = path.join(mainCheckoutRoot(repoRoot), 'agent-rack.config.json');
+  const configBefore = sha256File(userConfig);
+  const leftovers = sweepBenchLeftovers(repoRoot);
+  if (leftovers > 0) console.log(`Restos de corridas anteriores borrados: ${leftovers}.`);
+  const procsBefore = countOpencodeProcesses();
+
   const extraLimits =
     proveedor === 'opencode'
-      ? ['Con OpenCode, el camino solo corre con el MCP agent-rack de la config global de OpenCode conectado: sus definiciones de herramientas entran en el contexto de ambos caminos. No se aisló porque eso exige cambiar la config del usuario.']
+      ? [
+          'Camino solo: `opencode run --standalone` con config aislada (XDG_CONFIG_HOME propio, sin MCP y sin AGENTS.md global). Verificado: no carga ningún MCP.',
+          'Camino con Silka: servicio en segundo plano de opencode, porque solo ahí se alcanza el MCP agent-rack. Carga la config global del usuario (agent-rack, codegraph, unityMCP y AGENTS.md). Ese camino tiene más definiciones y reglas en contexto: la comparación está sesgada contra Silka y el ahorro real sería algo mayor.',
+        ]
       : [];
   const runners =
     proveedor === 'opencode'
       ? { solo: opencodeRunner({ model: models.solo }), silka: opencodeRunner({ model: models.silka, silka: true }) }
       : { solo: claudeRunner({ model: models.solo }), silka: claudeRunner({ model: models.silka, silka: true }) };
-  const result = await runBenchmark({
-    commit,
-    tasks,
-    tasksHash: hash,
-    models,
-    runners,
-    workdirFor: gitWorkdir(),
-    extraLimits,
-  });
+  let result;
+  try {
+    result = await runBenchmark({
+      commit,
+      tasks,
+      tasksHash: hash,
+      models,
+      runners,
+      workdirFor: gitWorkdir(repoRoot),
+      extraLimits,
+      repo: repoRoot,
+    });
+  } finally {
+    sweepBenchLeftovers(repoRoot);
+    const procsAfter = countOpencodeProcesses();
+    if (procsBefore != null && procsAfter != null) console.log(`Procesos opencode.exe: antes ${procsBefore}, después ${procsAfter} (el servicio en segundo plano cuenta también).`);
+  }
+  if (sha256File(userConfig) !== configBefore) {
+    console.error(`La config del usuario cambió durante la corrida (${userConfig}). Revísala antes de usar este informe.`);
+    return 1;
+  }
   const file = writeReport(REPORTS_DIR, result.date, result.markdown);
   console.log(`Informe: ${file}`);
   return 0;
