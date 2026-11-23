@@ -6,7 +6,7 @@
 // - opencode/hy4-flash-free: adaptador real opcional. Usa OpenCode con el modelo gratuito; si no está
 //   instalado, falla con error claro. Nunca es obligatorio.
 
-import { spawnSync } from 'node:child_process';
+import { ejecutarOpenCode } from './lib/opencode.mjs';
 import { assessRisk } from '../src/silka/tasks/risk.mjs';
 import { MODELO_JUEZ_GRATIS } from './graders/rubric.mjs';
 
@@ -48,24 +48,16 @@ const opencode = {
   nombre: MODELO_JUEZ_GRATIS,
   coste: 'gratis (modelo de OpenCode)',
   async responder(caso) {
-    const r = spawnSync('opencode', ['run', '--format', 'json', '--model', MODELO_JUEZ_GRATIS, promptDe(caso)], {
-      encoding: 'utf8',
-      timeout: 120_000,
-      windowsHide: true,
-    });
-    if (r.error?.code === 'ENOENT') throw new Error('opencode no está en el PATH; usa --modelo fake');
-    if (r.error) throw new Error(`opencode falló: ${r.error.message}`);
-    if (r.status !== 0) throw new Error(`opencode salió con código ${r.status}`);
-    // La salida real de OpenCode no se parsea aquí con garantías: el texto completo se califica tal cual.
-    // Los campos exactos solo se comparan si la respuesta es JSON válido.
+    const r = await ejecutarOpenCode(promptDe(caso), { modelo: MODELO_JUEZ_GRATIS });
+    // El texto sale de los eventos `text`; el uso, de los `step_finish` (null = sin dato, nunca se estima).
+    // Los campos exactos solo se comparan si la respuesta contiene JSON válido.
     if (caso.suite === 'exact') {
-      const texto = String(r.stdout ?? '').trim();
-      const inicio = texto.indexOf('{');
-      const fin = texto.lastIndexOf('}');
+      const inicio = r.texto.indexOf('{');
+      const fin = r.texto.lastIndexOf('}');
       if (inicio < 0 || fin < inicio) throw new Error('la respuesta no contiene JSON');
-      return { salida: JSON.parse(texto.slice(inicio, fin + 1)), uso: null };
+      return { salida: JSON.parse(r.texto.slice(inicio, fin + 1)), uso: r.uso };
     }
-    return { salida: r.stdout, uso: null };
+    return { salida: r.texto, uso: r.uso };
   },
 };
 

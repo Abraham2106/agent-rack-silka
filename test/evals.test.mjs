@@ -11,6 +11,7 @@ import { juezSimulado, judge, aprueba, parsearVeredictoOpenCode } from '../evals
 import { cargarCasos, leerTodosLosCasos, validarCaso } from '../evals/lib/casos.mjs';
 import { ejecutar } from '../evals/lib/runner.mjs';
 import { getModelo } from '../evals/modelos.mjs';
+import { interpretarSalida } from '../evals/lib/opencode.mjs';
 
 const RAIZ = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CASOS = join(RAIZ, 'evals', 'cases');
@@ -181,4 +182,24 @@ test('batch sin ANTHROPIC_API_KEY sale con 0 y un mensaje claro', () => {
   const r = spawnSync(process.execPath, [BATCH], { encoding: 'utf8', env, timeout: 60_000, windowsHide: true });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /sin ANTHROPIC_API_KEY/);
+});
+
+test('interpretarSalida lee el texto y suma el uso real de OpenCode (datos fijos)', () => {
+  const salida = [
+    JSON.stringify({ type: 'step_start', part: {} }),
+    JSON.stringify({ type: 'text', part: { text: 'hola ' } }),
+    JSON.stringify({ type: 'text', part: { text: 'mundo' } }),
+    JSON.stringify({ type: 'step_finish', part: { tokens: { input: 100, output: 7, reasoning: 3, cache: { read: 50, write: 10 } }, cost: 0 } }),
+    JSON.stringify({ type: 'step_finish', part: { tokens: { input: 20, output: 1, cache: { read: 0, write: 0 } }, cost: 0.5 } }),
+    'línea que no es JSON',
+  ].join('\n');
+  const r = interpretarSalida(salida);
+  assert.equal(r.texto, 'hola mundo');
+  assert.deepEqual(r.uso, { tokens_entrada: 180, tokens_salida: 11, usd: 0.5 });
+});
+
+test('interpretarSalida devuelve uso null (sin dato) si el proveedor no reporta tokens', () => {
+  const r = interpretarSalida(JSON.stringify({ type: 'text', part: { text: 'ok' } }));
+  assert.equal(r.texto, 'ok');
+  assert.equal(r.uso, null);
 });

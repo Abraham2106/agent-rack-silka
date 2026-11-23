@@ -7,7 +7,7 @@
 //
 // Rúbrica: { minimo?: number (0..1, por defecto 1), criterios: [{ id, descripcion, palabras? }] }
 
-import { spawnSync } from 'node:child_process';
+import { ejecutarOpenCode } from '../lib/opencode.mjs';
 
 export const MODELO_JUEZ_GRATIS = 'opencode/hy4-flash-free';
 
@@ -86,13 +86,6 @@ export function parsearVeredictoOpenCode(stdout, rubrica) {
  * lanza un error claro y el runner marca el caso como error (no como acierto).
  */
 export async function juezOpenCode(salida, rubrica) {
-  const r = spawnSync('opencode', ['run', '--format', 'json', '--model', MODELO_JUEZ_GRATIS, promptJuez(salida, rubrica)], {
-    encoding: 'utf8',
-    timeout: 120_000,
-    windowsHide: true,
-  });
-  if (r.error?.code === 'ENOENT') throw new Error('opencode no está en el PATH; usa --juez simulado');
-  if (r.error) throw new Error(`opencode falló: ${r.error.message}`);
-  if (r.status !== 0) throw new Error(`opencode salió con código ${r.status}`);
+  const r = await ejecutarOpenCode(promptJuez(salida, rubrica), { modelo: MODELO_JUEZ_GRATIS });
   return parsearVeredictoOpenCode(r.stdout, rubrica);
 }
