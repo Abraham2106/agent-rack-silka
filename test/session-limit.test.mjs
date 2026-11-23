@@ -49,6 +49,10 @@ test('BUG-10: con el tope de agent-rack lleno se espera 30 s y se avisa una sola
   const ids = ['tk-l1', 'tk-l2', 'tk-l3'];
   await mgr.launch(ids.map((id) => ({ id, title: id, scope: 'x', deliver: 'x', verify: 'node -e "0"' })), { manual: false });
   const logs = [];
+  // Cota sin depender de la carga: la espera se fija al rechazar (entre `before` y ahora), así que
+  // el plazo restante cae en [30 s, 30 s + lo que tarden los ciclos]. Medir contra Date.now() al
+  // final fallaba cuando 10 ciclos con git real tardaban más de 5 s bajo carga.
+  const before = Date.now();
   for (let i = 0; i < 10; i += 1) {
     // eslint-disable-next-line no-await-in-loop
     await superviseTasksOnce(client, { repoRoots: [repo], log: (m) => logs.push(m) });
@@ -57,7 +61,8 @@ test('BUG-10: con el tope de agent-rack lleno se espera 30 s y se avisa una sola
   const limitLines = logs.filter((m) => /Maximum concurrent sessions|no da más sesiones/.test(m));
   assert.equal(limitLines.length, 1, logs.join('\n'));
   assert.match(limitLines[0], /30 s/);
-  assert.ok(sessionLimit.until - Date.now() > SESSION_LIMIT_BACKOFF_MS - 5000);
+  assert.ok(sessionLimit.until >= before + SESSION_LIMIT_BACKOFF_MS, 'la espera dura al menos 30 s');
+  assert.ok(sessionLimit.until <= Date.now() + SESSION_LIMIT_BACKOFF_MS, 'y no más de 30 s desde que se fijó');
   assert.ok(mgr.list().every((t) => t.state === STATES.PLANIFICADA));
 
   // Pasan los 30 s (se simula) y sigue lleno: se reintenta una vez y no se vuelve a avisar.
