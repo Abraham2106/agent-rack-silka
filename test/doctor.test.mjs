@@ -13,7 +13,10 @@ function runDoctor(args, env = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'silka-doctor-cfg-'));
   return spawnSync(process.execPath, [cli, 'doctor', ...args], {
     encoding: 'utf8',
-    timeout: 60_000,
+    // El doctor consulta PowerShell (procesos, hora de inicio) varias veces y, bajo carga, puede
+    // tardar más de 60 s; si se corta, el JSON queda incompleto. Plazo holgado: la aserción no
+    // depende de la velocidad.
+    timeout: 240_000,
     env: {
       ...process.env,
       SILKA_CONFIG_DIR: dir,
